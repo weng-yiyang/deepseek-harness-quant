@@ -56,3 +56,13 @@ harness/home/profiles/node_modules/
 # ---- 内部维护文档（含本机路径，不进公开仓库） ----
 docs/上传GitHub.md
 docs/发布清单_v1.0.9.md
+
+# ---- 密钥（通用） ----
+.env
+.env.*
+
+# ---- 测试 / 覆盖率产物（Phase 0 新增） ----
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/

@@ -1,0 +1,14 @@
+[project]
+name = "deepseek-harness-quant"
+version = "1.0.9"
+description = "A股低频量化决策系统（Pitch决策链 + 因子引擎 + 五池远期验证 + HARNESS 嵌入）"
+readme = "README.md"
+requires-python = ">=3.10"
+# 运行时重依赖（backtrader/vectorbt/quantstats/numba）体积大且对 Python 版本敏感，
+# 不在此处强制安装；详见 requirements.txt。CI 仅安装轻量测试依赖以保证可复现绿。
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"

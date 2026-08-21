@@ -279,7 +279,8 @@ class DataAuditor:
                   f"→ 因子计算需跳过 volume=0 的日子")
 
         st = self._q(cur, "SELECT COUNT(*) FROM daily_bar WHERE is_st != 0") or 0
-        st_ratio = st / 8282007 if False else (st / (self._q(cur, "SELECT COUNT(*) FROM daily_bar") or 1))
+        total_rows = self._q(cur, "SELECT COUNT(*) FROM daily_bar") or 1
+        st_ratio = st / total_rows
         status = "FAIL" if st_ratio < self.th["st_ratio_min"] else "PASS"
         self._add("C5", "价格", "ST 标记有效性", status,
                   f"is_st≠0 共 {st} 行（占比 {st_ratio*100:.4f}%，阈值 {self.th['st_ratio_min']*100:.0f}%）"

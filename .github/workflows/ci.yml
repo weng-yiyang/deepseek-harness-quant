@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install lightweight test dependencies
+        # 仅安装网络无关、与 Python 版本无关的测试依赖；
+        # 重依赖（backtrader/vectorbt/quantstats/numba）不在 CI 全量安装，避免版本/编译失败。
+        run: |
+          python -m pip install --upgrade pip
+          pip install "numpy>=1.26" "pandas>=2.2" "pyyaml>=6.0" "scipy>=1.11" pytest
+
+      - name: Run tests
+        run: pytest

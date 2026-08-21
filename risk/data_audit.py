@@ -22,6 +22,7 @@
   python risk/data_audit.py                 # 全量审计 + 报告 + 闸门结论
   python risk/data_audit.py --quick         # 轻量审计（dev_auto 每轮调用，只跑关键项）
   python risk/data_audit.py --json          # 只输出 JSON 供程序消费
+  python risk/data_audit.py --gate          # 仅判定硬闸门（0=放行 / 1=阻断），供扫描/管道/CI 调用
 
 已知数据缺陷（2026-08-07 首次审计确认，修复清单见 data/fix_st_flags.py 与待办队列）：
   F-1 [P0] is_st 全 0：baostock 返回 '0'/'1'，fetcher map 字典用 'True'/'False' → 全部填 0
@@ -51,6 +52,14 @@ for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy",
 
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
+
+
+class AuditBlocked(Exception):
+    """数据审计未通过：实盘下单/扫描被硬闸门阻断。"""
+    pass
+
+
+STOP_FILE = BASE / "STOP.md"          # 审计熔断文件：存在且新鲜 → 管道/扫描熔断
 
 
 def _load_config() -> dict:
@@ -139,11 +148,11 @@ class DataAuditor:
         return sqlite3.connect(str(db))
 
     def _q(self, cur, sql, args=()):
-        """单值查询；异常返回 None 不抛"""
+        """单值查询；异常返回 None 不抛（与文档一致，且保证空/损坏库时安全 FAIL 而非崩溃）"""
         try:
             return cur.execute(sql, args).fetchone()[0]
-        except Exception as e:
-            return f"ERR:{type(e).__name__}:{e}"
+        except Exception:
+            return None
 
     def _add(self, check_id, category, name, status, detail, suggestion=""):
         self.items.append(AuditItem(check_id, category, name, status, detail, suggestion))
@@ -163,9 +172,9 @@ class DataAuditor:
     def check_completeness(self):
         con = self._conn(self.bars_db)
         cur = con.cursor()
-        n_total = self._q(cur, "SELECT COUNT(*) FROM daily_bar")
-        n_codes = self._q(cur, "SELECT COUNT(DISTINCT code) FROM daily_bar")
-        n_meta = self._q(cur, "SELECT COUNT(*) FROM bar_meta")
+        n_total = self._q(cur, "SELECT COUNT(*) FROM daily_bar") or 0
+        n_codes = self._q(cur, "SELECT COUNT(DISTINCT code) FROM daily_bar") or 0
+        n_meta = self._q(cur, "SELECT COUNT(*) FROM bar_meta") or 0
         self._add("A1", "完整性", "全表规模", "PASS" if n_total and n_total > 5_000_000 else "WARN",
                   f"daily_bar {n_total:,} 行 / {n_codes} 只 / bar_meta {n_meta} 条")
 
@@ -198,8 +207,8 @@ class DataAuditor:
                   f"样本: {sorted(list(missing))[:5]}）→ 回测收益虚高风险",
                   "F-2: 补拉 148 只退市股（2019-退市日）后重跑 v3 验收")
 
-        few = cur.execute("SELECT COUNT(*) FROM (SELECT code FROM daily_bar GROUP BY code HAVING COUNT(*)<?)",
-                          (self.th["min_rows_per_stock"],)).fetchone()[0]
+        few = self._q(cur, "SELECT COUNT(*) FROM (SELECT code FROM daily_bar GROUP BY code HAVING COUNT(*)<?)",
+                      (self.th["min_rows_per_stock"],)) or 0
         self._add("A4", "完整性", "短数据股票", "WARN" if few > 5 else "PASS",
                   f"行数 <{self.th['min_rows_per_stock']} 的股票 {few} 只（多为次新股/退市边缘）")
 
@@ -285,7 +294,7 @@ class DataAuditor:
         self._add("C5", "价格", "ST 标记有效性", status,
                   f"is_st≠0 共 {st} 行（占比 {st_ratio*100:.4f}%，阈值 {self.th['st_ratio_min']*100:.0f}%）"
                   f"→ ST 标记疑似失效，filter_st 形同虚设",
-                  "F-1: fetcher map 字典 bug 已修，待 data/fix_st_flags.py 全量重拉")
+                  "F-1: 跑 data/fix_st_flags_tushare.py（推荐，需 tushare）或 data/fix_st_flags.py（baostock）全量重拉 is_st")
         con.close()
 
     # ---------------- D. 量价一致性 ----------------
@@ -361,16 +370,113 @@ class DataAuditor:
         mv = {p.name: p.stat().st_size for p in cache_dir.glob("circ_mv*.csv")}
         self._add("F2", "PIT", "市值映射文件", "PASS" if mv else "WARN", f"{mv}")
 
+    # ---------------- F-3. 回测起点对齐 ----------------
+    def check_alignment(self):
+        """F-3 回测起点对齐：data_audit.backtest_start 应 ≥ 数据实际起点，
+        否则 backtest.start 早于数据起点 → 前段空转（2010-2018 等年份无数据白跑）。
+        仅当配置提供合法日期时检查；默认（无配置）跳过，不报错。"""
+        bs = (self.cfg or {}).get("backtest_start")
+        if not bs:
+            return
+        try:
+            from datetime import date as _d
+            bs_d = _d.fromisoformat(str(bs))
+        except Exception:
+            return
+        con = self._conn(self.bars_db)
+        cur = con.cursor()
+        mn = self._q(cur, "SELECT MIN(date) FROM daily_bar")
+        con.close()
+        if not mn:
+            return
+        try:
+            mn_d = _d.fromisoformat(str(mn))
+        except Exception:
+            return
+        gap_days = (mn_d - bs_d).days
+        if gap_days > 0:
+            # backtest.start 早于数据起点 → 前段空转（F-3）
+            status = "FAIL" if gap_days > 365 else "WARN"
+            self._add("F3", "对齐", "回测起点对齐(F-3)", status,
+                      f"backtest.start={bs} 早于数据起点 {mn} 共 {gap_days} 天 → 回测前段空转",
+                      "F-3: 将 backtest.start 同步为数据起点（data_audit.backtest_start 或 bulk_loader START_DATE）")
+        else:
+            self._add("F3", "对齐", "回测起点对齐(F-3)", "PASS",
+                      f"backtest.start={bs} ≥ 数据起点 {mn}（对齐）")
+
+    # ---------------- 硬闸门（实盘前置） ----------------
+    def assert_audit_passes(self, quick: bool = True, context: str = "实盘下单"):
+        """审计未通过则抛 AuditBlocked（供下单/扫描入口 try/except 捕获并终止）。"""
+        r = self.run(quick=quick)
+        if r["blocked"]:
+            raise AuditBlocked(f"数据审计未通过（{context}被硬闸门阻断）：{r['block_reason']}")
+        return r
+
+    def require_clean_data(self, quick: bool = True, context: str = "实盘下单"):
+        """与 assert_audit_passes 等价，语义化入口（扫描/管道调用此方法）。"""
+        return self.assert_audit_passes(quick=quick, context=context)
+
+    @staticmethod
+    def is_stop_active(max_age_hours: float = 24.0) -> bool:
+        """STOP.md 是否存在且新鲜（未超龄）。超龄视为陈旧自动清除并返回 False。
+
+        删除失败（权限/文件锁定/沙箱回收站不可用等）一律按"已失效"处理 ——
+        绝不因清理动作异常而把异常抛给调用方（daily_pipeline 的 STOP 检查因此失控）。
+        """
+        if not STOP_FILE.exists():
+            return False
+        try:
+            age_h = (time.time() - STOP_FILE.stat().st_mtime) / 3600.0
+        except OSError:
+            return False
+        if age_h > max_age_hours:
+            try:
+                STOP_FILE.unlink(missing_ok=True)
+            except OSError:
+                pass  # 删不掉也按超龄失效处理
+            return False
+        return True
+
+    def _write_stop(self, reason: str):
+        """写入 STOP.md 熔断文件（存在且新鲜 → 管道/扫描熔断）。"""
+        try:
+            STOP_FILE.write_text(
+                f"# 数据审计熔断 (STOP)\n\n"
+                f"- 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"- 原因: {reason}\n"
+                f"- 处理: 修复数据（运行 data/fix_st_flags.py、data/backfill_delisted.py 等）后，"
+                f"删除本文件并重新运行 `python risk/data_audit.py` 通过后再继续。\n",
+                encoding="utf-8")
+        except Exception:
+            pass
+
     # ---------------- 主流程 ----------------
     def run(self, quick=False):
         self.items = []
-        self.check_completeness()
-        self.check_consistency()
-        self.check_price()
-        self.check_volume()
-        if not quick:
-            self.check_finance()
-            self.check_pit()
+        try:
+            self.check_completeness()
+            self.check_consistency()
+            self.check_price()
+            self.check_volume()
+            self.check_alignment()      # F-3 回测起点对齐（配置驱动，默认跳过）
+            if not quick:
+                self.check_finance()
+                self.check_pit()
+        except Exception as e:
+            # 失败关闭（fail-closed）：审计过程任何异常 → 视为数据不可信，直接阻断，绝不崩管道
+            self._add("ERR", "异常", "审计执行异常", "FAIL",
+                      f"审计过程中抛出异常：{type(e).__name__}: {e} → 按 FAIL 阻断",
+                      "检查 bars.db / finance.db 等是否完整、schema 是否齐全")
+            return {
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "elapsed_sec": round(time.time() - self._start_ts, 1),
+                "quick": quick, "health": 0.0, "n_items": len(self.items),
+                "n_pass": 0, "n_warn": 0, "n_fail": 1,
+                "fails": ["审计执行异常"],
+                "blocked": True,
+                "block_reason": f"数据审计执行异常（{type(e).__name__}）→ 数据不可信，阻断",
+                "items": [i.to_dict() for i in self.items],
+            }
 
         n = len(self.items)
         score_map = {"PASS": 1.0, "WARN": 0.5, "FAIL": 0.0}
@@ -390,6 +496,9 @@ class DataAuditor:
         elif self.cfg.get("warn_block") and n_warn >= self.cfg.get("warn_block_count", 6):
             blocked = True
             reason = f"数据审计 WARN {n_warn} 项 ≥ 阈值 → 阻断"
+
+        if blocked:
+            self._write_stop(reason)
 
         result = {
             "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -444,9 +553,19 @@ def main():
     ap = argparse.ArgumentParser(description="数据审计（风控前置闸门）")
     ap.add_argument("--quick", action="store_true", help="轻量审计（dev_auto 每轮用）")
     ap.add_argument("--json", action="store_true", help="只输出 JSON")
+    ap.add_argument("--gate", action="store_true",
+                    help="仅做硬闸门判定并退出（0=放行 / 1=阻断），供扫描/管道/CI 调用")
     args = ap.parse_args()
 
     auditor = DataAuditor(_load_config())
+
+    if args.gate:
+        ok, r = auditor.gate()
+        print("PASS" if ok else "FAIL")
+        if not ok:
+            print(f"阻断原因: {r['block_reason']}")
+        sys.exit(0 if ok else 1)
+
     result = auditor.run(quick=args.quick)
     md_path, json_path = auditor.save_report(result)
 

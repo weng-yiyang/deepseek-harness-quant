@@ -131,6 +131,21 @@ def main():
     except Exception as _e:
         log(f"锁检查异常（继续执行）: {_e}")
 
+    # ★Phase1 实盘硬闸门（数据可信前置）：审计 FAIL → 写 STOP.md 熔断本轮；STOP.md 存在且新鲜 → 直接熔断
+    try:
+        from risk.data_audit import DataAuditor, _load_config
+        if DataAuditor.is_stop_active():
+            log("⛔ 发现 STOP.md 熔断文件（<24h）→ 本轮跳过，先修复数据再删除 STOP.md")
+            return
+        _aud = DataAuditor(_load_config())
+        _r = _aud.run(quick=True)
+        if _r["blocked"]:
+            log(f"⛔ 数据审计未通过 → 写 STOP.md 并熔断本轮：{_r['block_reason']}")
+            return
+        log(f"✓ 数据审计通过（健康度 {_r['health']}/100），继续每日管道")
+    except Exception as _e:
+        log(f"⚠ 审计闸门检查异常（继续执行，但建议排查）：{_e}")
+
     # ★2026-08-14 非交易日跳过：周末无新行情，分钟/日线/因子池/扫描全幂等但纯浪费算力
     #   （尤其因子池评分补跑 30+ 分钟），直接跳过；周一自动恢复。节假日（工作日）幂等无害，不拦。
     import datetime as _dt

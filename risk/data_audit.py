@@ -418,17 +418,24 @@ class DataAuditor:
 
     @staticmethod
     def is_stop_active(max_age_hours: float = 24.0) -> bool:
-        """STOP.md 是否存在且新鲜（未超龄）。超龄视为陈旧自动清除并返回 False。"""
+        """STOP.md 是否存在且新鲜（未超龄）。超龄视为陈旧自动清除并返回 False。
+
+        删除失败（权限/文件锁定/沙箱回收站不可用等）一律按"已失效"处理 ——
+        绝不因清理动作异常而把异常抛给调用方（daily_pipeline 的 STOP 检查因此失控）。
+        """
         if not STOP_FILE.exists():
             return False
         try:
             age_h = (time.time() - STOP_FILE.stat().st_mtime) / 3600.0
-            if age_h > max_age_hours:
-                STOP_FILE.unlink(missing_ok=True)
-                return False
-            return True
-        except Exception:
+        except OSError:
             return False
+        if age_h > max_age_hours:
+            try:
+                STOP_FILE.unlink(missing_ok=True)
+            except OSError:
+                pass  # 删不掉也按超龄失效处理
+            return False
+        return True
 
     def _write_stop(self, reason: str):
         """写入 STOP.md 熔断文件（存在且新鲜 → 管道/扫描熔断）。"""

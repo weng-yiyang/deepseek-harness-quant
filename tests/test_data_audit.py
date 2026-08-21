@@ -105,7 +105,12 @@ def test_stop_md_written_on_broken_db(tmp_path, monkeypatch):
         # STOP.md 新鲜 → is_stop_active 应为 True
         assert DataAuditor.is_stop_active() is True
     finally:
-        STOP_FILE.unlink(missing_ok=True)
+        # 清理熔断文件；unlink 在受限环境（如沙箱安全删除拦截）可能抛 OSError，
+        # 不应因此让本已通过的测试判失败 —— 忽略删除异常即可。
+        try:
+            STOP_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def test_f3_alignment_detects_mismatch(tmp_path, monkeypatch):

@@ -2468,7 +2468,23 @@ def main():
     ap.add_argument("--types", type=str, default=None, help="逗号分隔机会类型")
     ap.add_argument("--date", type=str, default=None)
     ap.add_argument("--pitch", action="store_true", help="输出 Pitch 候选")
+    ap.add_argument("--no-audit", action="store_true",
+                    help="跳过数据审计硬闸门（仅调试用，实盘禁止）")
     args = ap.parse_args()
+
+    # ★Phase1 实盘硬闸门：数据不可信 → 禁止扫描出单
+    if not args.no_audit:
+        try:
+            from risk.data_audit import require_clean_data, AuditBlocked
+            require_clean_data(quick=True, context="机会扫描")
+        except AuditBlocked as e:
+            print(f"[审计阻断] {e}")
+            return 2
+        except Exception as e:
+            print(f"[警告] 审计硬闸门不可用（{e}）→ 本次跳过审计（请排查 risk/data_audit.py）")
+    else:
+        print("[警告] --no-audit：已跳过数据审计硬闸门（仅调试用，实盘禁止）")
+
     types = args.types.split(",") if args.types else None
     r = scan(types=types, date=args.date, pitch_only=args.pitch)
     if "error" in r:

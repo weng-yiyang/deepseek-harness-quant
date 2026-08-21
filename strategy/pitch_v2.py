@@ -202,7 +202,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true", help="重新扫描机会引擎")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--no-audit", action="store_true",
+                    help="跳过数据审计硬闸门（仅调试用，实盘禁止）")
     args = ap.parse_args()
+
+    # ★Phase1 实盘硬闸门：数据不可信 → 禁止 Pitch 出单（--status 为只读查看，不阻断）
+    if not args.no_audit and not args.status:
+        try:
+            from risk.data_audit import require_clean_data, AuditBlocked
+            require_clean_data(quick=True, context="Pitch 构建")
+        except AuditBlocked as e:
+            print(f"[审计阻断] {e}")
+            return 2
+        except Exception as e:
+            print(f"[警告] 审计硬闸门不可用（{e}）→ 本次跳过审计（请排查 risk/data_audit.py）")
+    elif args.no_audit:
+        print("[警告] --no-audit：已跳过数据审计硬闸门（仅调试用，实盘禁止）")
 
     if args.status:
         ds = decisions_summary()

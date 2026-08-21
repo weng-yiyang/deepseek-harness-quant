@@ -1,5 +1,13 @@
-# DeepSeek HARNESS Quant · 依赖清单（v2.5）
-# 安装：python -m pip install -r requirements.txt
+# DeepSeek HARNESS Quant · 依赖清单（v2.5 → 实盘改造 Phase 0 校正）
+# 安装（建议 Python 3.11；3.10 亦可，见下方 vectorbt 说明）：
+#   python -m pip install -r requirements.txt
+#
+# 2026-08-21 校正说明：
+#   - 新增 scipy：risk/risk_agent.py 用到 scipy.stats，且被 backtest/bt_engine.py 导入，
+#     原清单缺失会导致安装后首次跑回测即 ModuleNotFoundError（P0 阻断）。
+#   - vectorbt：PyPI 开源版 1.x 要求 Python >=3.11；若坚持 Python 3.10 请用 0.28.x。
+#     这里钉 0.28.5（最后支持 3.10 的稳定线）。需 Python 3.11+ 时改为 vectorbt>=1.0.0。
+#   - numba 为 vectorbt 的隐式依赖，显式列出以便可复现安装。
 
 # ---- 数据源 ----
 baostock>=0.8.9            # 行情主源（稳）
@@ -8,13 +16,15 @@ tushare>=1.4.0             # 财报主源（ann_date → Point-in-Time，需 tok
 
 # ---- 回测与绩效 ----
 backtrader>=1.9.78         # 主回测引擎（实测通过）
-vectorbt>=1.0.0            # 参数扫描/Ablation 加速（实测通过，注意 freq='D' 与 1.1 API）
+vectorbt==0.28.5           # 参数扫描/Ablation 加速；Python 3.11+ 可改 >=1.0.0（注意 API 差异）
+numba>=0.59                # vectorbt 隐式依赖（显式钉定以便复现）
 quantstats>=0.0.81         # 绩效指标（实测通过）
 
-# ---- 数据处理 ----
+# ---- 数据处理 / 计算（必装） ----
 numpy>=1.26
 pandas>=2.2
 pyyaml>=6.0                # 读取 config/params.yaml
+scipy>=1.11                # ★新增：risk/risk_agent.py 用到（贝叶斯 Kelly 等），原清单缺失
 
 # ---- 可选 ----
 matplotlib>=3.8            # 图表

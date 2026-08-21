@@ -351,6 +351,31 @@ def get_stock_st(start_date: str = None, end_date: str = None) -> pd.DataFrame:
     return df
 
 
+def get_stock_st_intervals(start_year: int = 2010) -> dict:
+    """全市场 ST 状态区间 → {ts_code: [(start_date, end_date), ...]}，仅保留 stock_st==1（ST 期间）
+
+    用途（消除 baostock 停服风险，F-1/F-2 共用）：
+    - F-1 修复 daily_bar.is_st：对每只股票的 ST 区间 UPDATE is_st=1
+    - F-2 退市股回填时按区间标注 is_st
+    实现：按年分块拉 stock_st（规避 5000 行/次上限），year 区间 [start_year, 今年]。
+    ts_code 形如 '600519.SH'，与 daily_bar.code 直接对齐。"""
+    pro = _pro()
+    intervals: dict = {}
+    this_year = datetime.now().year
+    for y in range(start_year, this_year + 1):
+        df = _call(pro.stock_st, start_date=f"{y}0101", end_date=f"{y}1231")
+        if df is None or df.empty:
+            continue
+        for _, r in df.iterrows():
+            code = str(r.get("ts_code") or "").strip().upper()
+            flag = str(r.get("stock_st"))
+            s = str(r.get("start_date") or "")[:10]
+            e = str(r.get("end_date") or "")[:10]
+            if code and flag == "1" and s and e:
+                intervals.setdefault(code, []).append((s, e))
+    return intervals
+
+
 if __name__ == "__main__":
     print("[自测] Tushare 主服务器 v2")
     lst = get_stock_list()

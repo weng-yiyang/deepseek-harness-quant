@@ -294,7 +294,7 @@ class DataAuditor:
         self._add("C5", "价格", "ST 标记有效性", status,
                   f"is_st≠0 共 {st} 行（占比 {st_ratio*100:.4f}%，阈值 {self.th['st_ratio_min']*100:.0f}%）"
                   f"→ ST 标记疑似失效，filter_st 形同虚设",
-                  "F-1: fetcher map 字典 bug 已修，待 data/fix_st_flags.py 全量重拉")
+                  "F-1: 跑 data/fix_st_flags_tushare.py（推荐，需 tushare）或 data/fix_st_flags.py（baostock）全量重拉 is_st")
         con.close()
 
     # ---------------- D. 量价一致性 ----------------

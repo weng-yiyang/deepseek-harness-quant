@@ -246,7 +246,7 @@ data_audit:
   warn_block: false             # 可选：WARN 数过多也阻断
   warn_block_count: 6
   report_dir: "report"          # 输出 report/data_audit_report.{md,json}
-  backtest_start: "<your-config>" # 与 backtest.start 一致；审计校验"回测起点≥数据起点"，否则前段空转(F-3)
+  backtest_start: "2019-01-01" # 与 backtest.start / bulk_loader START_DATE 对齐（数据实际起点 2019-01-01）；审计校验"回测起点≥数据起点"，否则前段空转(F-3)。若你实际数据起点不同，改为对应日期。
   gate_on_scan: true            # factors/opportunities/scan.py 入口调用审计硬闸门；FAIL 阻断扫描出单
   gate_on_pipeline: true        # data/daily_pipeline.py 入口调用审计硬闸门；FAIL 写 STOP.md 并熔断
   stop_md_max_age_hours: 24     # STOP.md 超过该时长视为陈旧自动清除（避免永久卡死）

@@ -34,6 +34,7 @@ from execution.models import Order, OrderStatus, Side, MarketContext
 from execution.oms import OMS
 from execution.brokers.sim import SimBroker
 from execution.positions import PositionBook
+from execution.risk_gate import RiskGate
 
 from strategy.paper_account import PaperAccount
 try:
@@ -84,8 +85,10 @@ def build_ctx_from_db(code: str, date: str) -> Optional[MarketContext]:
             break
     con.close()
     if not row:
-        # 无该日行情：视为退市/不可交易
-        return MarketContext(date=date, code=code, close=0.0, delisted=True)
+        # ★P2-1：无该日行情 ≠ 退市（可能是数据缺失 / 停牌 / 未上市）。
+        # 返回 close=0 → preflight 判 NO_MARKET_DATA（语义正确，提示去查数据）；
+        # delisted 应由退市名单判定，不在此处臆断，避免日志把"数据没拉到"写成"退市"。
+        return MarketContext(date=date, code=code, close=0.0)
     is_st = bool(row[5]) if row[5] is not None else False
     return MarketContext.from_bar(code, date, {
         "open": row[0], "high": row[1], "low": row[2], "close": row[3],
@@ -126,20 +129,34 @@ def load_plan_from_deck(deck_path: str = None) -> dict:
 # ---------- 主流程 ----------
 def run_plan(plan: dict, *, account: PaperAccount, ctx_provider: Callable[[str, str], Optional[MarketContext]] = None,
              auto_approve: bool = False, data_ok: bool = True, st_filter: bool = True,
-             oms_db=None) -> dict:
+             oms_db=None, risk_config: Optional[dict] = None, enable_risk: bool = True) -> dict:
     """执行一份订单计划，返回汇总 dict。"""
     as_of = plan.get("as_of_date")
     orders_in = plan.get("orders", [])
     summary = {"created": 0, "approved": 0, "filled": 0, "rejected": 0,
-               "pending_human": 0, "fills": [], "blocked": False}
+               "pending_human": 0, "reduced": 0, "fills": [], "blocked": False}
 
     if not data_ok:
         print("⛔ 数据审计未通过 / STOP.md 存在 → 拒绝执行（脏数据不下单）")
         summary["blocked"] = True
         return summary
 
+    # ★Phase 3 风控闸门（RiskAgent 经 RiskGate 适配：股数↔净值占比）
+    gate = RiskGate(account, risk_config) if enable_risk else None
+    if gate is not None:
+        # 预置当日行情（持仓 + 本次计划标的），供风控估算净值/组合权重
+        codes = {p["code"] for p in account.positions()} | {o["code"] for o in orders_in}
+        prices = {}
+        for c in codes:
+            cx = ctx_provider(c, as_of or "") if ctx_provider else build_ctx_from_db(c, as_of or "")
+            if cx and cx.close > 0:
+                prices[c] = cx.close
+        gate.prices = prices
+        summary["risk"] = {"equity": round(gate.equity(prices), 2),
+                           "drawdown": round(gate.current_drawdown(), 4)}
+
     oms = OMS(account, db_path=oms_db, allow_auto_approve=auto_approve,
-              st_filter=st_filter, data_ok=data_ok)
+              st_filter=st_filter, data_ok=data_ok, risk_gate=gate)
     pb = PositionBook(account)
     # 现金/持仓回调（供 SimBroker 做部分成交判定）
     broker = SimBroker(
@@ -180,8 +197,12 @@ def run_plan(plan: dict, *, account: PaperAccount, ctx_provider: Callable[[str, 
         fill = oms.submit(o.id, broker, ctx)
         if fill.ok:
             summary["filled"] += 1
-            summary["fills"].append({"id": o.id, "code": o.code, "side": o.side.value,
-                                     "qty": fill.filled_qty, "price": fill.price})
+            rec = {"id": o.id, "code": o.code, "side": o.side.value,
+                   "qty": fill.filled_qty, "price": fill.price}
+            if fill.filled_qty < o.qty:      # 被风控缩量或券商部分成交
+                summary["reduced"] += 1
+                rec["reduced_from"] = o.qty
+            summary["fills"].append(rec)
         else:
             summary["rejected"] += 1
             summary["fills"].append({"id": o.id, "code": o.code, "side": o.side.value,
@@ -210,6 +231,8 @@ def main():
     ap.add_argument("--date", help="交易日 as_of_date（覆盖计划）")
     ap.add_argument("--account", default="demo")
     ap.add_argument("--no-st-filter", action="store_true", help="关闭 ST 名称盘前过滤")
+    ap.add_argument("--no-risk", action="store_true",
+                    help="关闭风控闸门（★仅调试用，实盘禁止）")
     ap.add_argument("--deck-path", help="自定义 deck_decisions.json 路径")
     args = ap.parse_args()
 
@@ -226,8 +249,12 @@ def main():
     if args.date:
         plan["as_of_date"] = args.date
 
+    if args.no_risk:
+        print("⚠ --no-risk：已关闭风控闸门（仅调试用，实盘禁止）")
+
     summary = run_plan(plan, account=account, auto_approve=args.auto_approve,
-                       data_ok=True, st_filter=not args.no_st_filter)
+                       data_ok=True, st_filter=not args.no_st_filter,
+                       enable_risk=not args.no_risk)
     print("\n==== 执行汇总 ====")
     print(json.dumps({k: v for k, v in summary.items() if k != "fills"},
                      ensure_ascii=False, indent=1))

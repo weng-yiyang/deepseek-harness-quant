@@ -67,7 +67,13 @@ class PaperAccount:
             positions_value REAL, PRIMARY KEY (account, date)
         );
         """)
-        con.commit()
+        # ★P1-1 兼容旧库：补充 last_buy_date（最近一次建仓/加仓日，T+1 判定依据）
+        # 旧代码只看 entry_date（首次建仓日），导致"昨日建仓 + 今日加仓 → 今日可全卖"违反 T+1。
+        try:
+            con.execute("ALTER TABLE positions ADD COLUMN last_buy_date TEXT")
+            con.commit()
+        except Exception:
+            pass  # 列已存在
         con.close()
 
     def _ensure_account(self):
@@ -110,11 +116,16 @@ class PaperAccount:
             old_qty, old_cost = cur
             new_qty = old_qty + qty
             new_cost = (old_cost * old_qty + close * qty) / new_qty
-            con.execute("UPDATE positions SET qty=?, avg_cost=? WHERE account=? AND code=?",
-                        (new_qty, new_cost, self.name, code))
+            # ★P1-1：加仓同步更新 last_buy_date（T+1 依据；entry_date 保留为首次建仓日）
+            con.execute(
+                "UPDATE positions SET qty=?, avg_cost=?, last_buy_date=? "
+                "WHERE account=? AND code=?",
+                (new_qty, new_cost, date, self.name, code))
         else:
-            con.execute("INSERT INTO positions VALUES (?,?,?,?,?)",
-                        (self.name, code, qty, close, date))
+            con.execute(
+                "INSERT INTO positions (account,code,qty,avg_cost,entry_date,last_buy_date) "
+                "VALUES (?,?,?,?,?,?)",
+                (self.name, code, qty, close, date, date))
         con.execute("INSERT INTO orders (account,date,code,action,qty,price,fee,reason) VALUES (?,?,?,?,?,?,?,?)",
                     (self.name, date, code, "BUY", qty, close, fee, reason))
         con.commit()
@@ -189,10 +200,12 @@ class PaperAccount:
     # ---------- 查询 ----------
     def positions(self) -> list:
         con = self._conn()
-        rows = con.execute("SELECT code, qty, avg_cost, entry_date FROM positions WHERE account=?",
-                           (self.name,)).fetchall()
+        rows = con.execute(
+            "SELECT code, qty, avg_cost, entry_date, last_buy_date FROM positions WHERE account=?",
+            (self.name,)).fetchall()
         con.close()
-        return [{"code": r[0], "qty": r[1], "avg_cost": r[2], "entry_date": r[3]} for r in rows]
+        return [{"code": r[0], "qty": r[1], "avg_cost": r[2], "entry_date": r[3],
+                 "last_buy_date": r[4]} for r in rows]
 
     def equity_curve(self) -> list:
         con = self._conn()

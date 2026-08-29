@@ -101,17 +101,52 @@ def load_plan_from_json(path: str) -> dict:
         return json.load(f)
 
 
+def _parse_deck_items(text: str) -> list:
+    """解析 deck 决策文件，兼容三种真实格式：
+    ① JSONL —— pitch_v2/Deck 实际写入格式（每行一个 JSON 对象，见 pitch_v2.decisions_summary）
+    ② JSON 数组 ③ JSON 对象（含 decisions/orders 键，或本身即单个决策对象）
+
+    解析不出任何条目时返回 []（fail-safe：宁可不下单，也不误下单）。
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    lines = [l for l in text.splitlines() if l.strip()]
+    # ① 多行：优先按 JSONL 解析（真实场景的主路径）
+    if len(lines) > 1:
+        try:
+            return [json.loads(l) for l in lines]
+        except json.JSONDecodeError:
+            pass      # 多行 pretty JSON 也会走到这里 → 由 ② 兜底
+    # ② 整体解析：数组 / 对象 / 单行 JSONL
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if isinstance(data.get("decisions"), list):
+            return data["decisions"]
+        if isinstance(data.get("orders"), list):
+            return data["orders"]
+        if "action" in data:              # 单行 JSONL：本身就是一条决策
+            return [data]
+    return []
+
+
 def load_plan_from_deck(deck_path: str = None) -> dict:
     """读 logs/deck_decisions.json（人工审批产物）→ 订单计划。"""
     p = Path(deck_path) if deck_path else (BASE / "logs" / "deck_decisions.json")
     if not p.exists():
         raise FileNotFoundError(f"未找到人工审批文件: {p}")
-    data = json.loads(p.read_text(encoding="utf-8"))
+    items = _parse_deck_items(p.read_text(encoding="utf-8"))
     orders = []
-    items = data if isinstance(data, list) else data.get("decisions", data.get("orders", []))
     for it in items:
+        if not isinstance(it, dict):
+            continue
         action = str(it.get("action", "")).lower()
-        if action not in ("buy", "买入", "BUY"):
+        if action not in ("buy", "买入"):
             continue
         code = it.get("code")
         if not code:
@@ -129,7 +164,8 @@ def load_plan_from_deck(deck_path: str = None) -> dict:
 # ---------- 主流程 ----------
 def run_plan(plan: dict, *, account: PaperAccount, ctx_provider: Callable[[str, str], Optional[MarketContext]] = None,
              auto_approve: bool = False, data_ok: bool = True, st_filter: bool = True,
-             oms_db=None, risk_config: Optional[dict] = None, enable_risk: bool = True) -> dict:
+             oms_db=None, risk_config: Optional[dict] = None, enable_risk: bool = True,
+             approve_by: Optional[str] = None) -> dict:
     """执行一份订单计划，返回汇总 dict。"""
     as_of = plan.get("as_of_date")
     orders_in = plan.get("orders", [])
@@ -175,8 +211,10 @@ def run_plan(plan: dict, *, account: PaperAccount, ctx_provider: Callable[[str, 
         summary["created"] += 1
 
     if auto_approve:
+        # approve_by 用于审计留痕：盘前编排传 "deck-approved"（人已在 Deck 审批），
+        # 仿真自测默认 "auto-sim"。两者都要求 OMS 开启 allow_auto_approve。
         for order in created:
-            oms.approve(order.id, by="auto-sim")
+            oms.approve(order.id, by=approve_by or "auto-sim")
             summary["approved"] += 1
     else:
         # human-in-the-loop：停在待审批，打印清单，交由人工 approve

@@ -56,12 +56,13 @@ _COLS = ["id", "account", "code", "side", "qty", "date", "reason", "limit_price"
 
 class OMS:
     def __init__(self, account: "PaperAccount", db_path=None, allow_auto_approve: bool = False,
-                 st_filter: bool = True, data_ok: bool = True):
+                 st_filter: bool = True, data_ok: bool = True, risk_gate=None):
         self.account = account
         self.db_path = str(db_path or OMS_DB)
         self.allow_auto_approve = allow_auto_approve
         self.st_filter = st_filter          # 是否启用 ST 名称盘前过滤（默认开）
         self.data_ok = data_ok              # 外部（execution_loop）已跑过的数据闸门结果
+        self.risk_gate = risk_gate          # Phase 3：风控闸门（RiskGate），None=不启用风控
         self._init_db()
 
     # ---------- 数据库 ----------
@@ -206,8 +207,12 @@ class OMS:
             return RejectReason.LIMIT_DOWN
         if o.side == Side.SELL:
             pos = self._position_of(o.code)
-            if pos and pos.get("entry_date") == o.date:   # T+1：当日买入不可当日卖
-                return RejectReason.T1_SELL
+            # ★P1-1：以 last_buy_date 为准（加仓会同步更新），旧库无该列时回退 entry_date。
+            # 旧逻辑只看 entry_date（首次建仓日），"昨日建仓+今日加仓"后今日可全卖 → 违反 T+1。
+            if pos:
+                last_buy = pos.get("last_buy_date") or pos.get("entry_date")
+                if last_buy == o.date:      # T+1：当日买入（含加仓）不可当日卖
+                    return RejectReason.T1_SELL
         return None
 
     def _position_of(self, code: str) -> Optional[dict]:
@@ -245,7 +250,23 @@ class OMS:
             self._mark_rejected(oid, reason)
             price = ctx.close if ctx else 0.0
             return Fill(oid, o.code, o.side, 0, price, reject_reason=reason)
-        fill = broker.submit(o, ctx)
+        # ★Phase 3 风控闸门：送券商撮合前审核（BUY 走完整风控；SELL 由 RiskGate 放行＝减仓不限）
+        exec_order = o
+        if self.risk_gate is not None and ctx is not None:
+            g = self.risk_gate.check(o, price=ctx.close)
+            if not g.ok:
+                self._mark_rejected(oid, RejectReason.RISK_REJECT)
+                self._mark(oid, error=g.reason)
+                return Fill(oid, o.code, o.side, 0, ctx.close,
+                            reject_reason=RejectReason.RISK_REJECT)
+            if g.qty != o.qty:      # REDUCE：按风控缩量后执行
+                exec_order = Order(id=o.id, account=o.account, code=o.code,
+                                   side=o.side, qty=g.qty, date=o.date,
+                                   reason=o.reason, limit_price=o.limit_price,
+                                   status=o.status)
+                self._mark(oid, error=f"[风控缩量 {o.qty}→{g.qty}] {g.reason}")
+
+        fill = broker.submit(exec_order, ctx)
         if not fill.ok:
             self._mark_rejected(oid, fill.reject_reason or RejectReason.UNKNOWN)
             return fill

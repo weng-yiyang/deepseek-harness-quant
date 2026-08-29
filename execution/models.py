@@ -38,6 +38,7 @@ class RejectReason(str, Enum):
     INSUFFICIENT_CASH = "INSUFFICIENT_CASH"    # 现金不足（部分成交后仍为 0）
     INSUFFICIENT_POSITION = "INSUFFICIENT_POSITION"  # 持仓不足
     AUDIT_FAIL = "AUDIT_FAIL"                  # 数据审计未通过（脏数据不下单）
+    RISK_REJECT = "RISK_REJECT"                # 风控否决（超仓位/回撤/熔断）
     HUMAN_REJECTED = "HUMAN_REJECTED"          # 人工驳回
     UNKNOWN = "UNKNOWN"
 

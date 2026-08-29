@@ -4,6 +4,7 @@
 覆盖：仿真券商撮合规则、OMS 生命周期、human-in-the-loop 审批闸门、盘前过滤、
 接 Phase 1 数据闸门、全链路 auto_approve 闭环。全部用合成数据，无需网络/真实库。
 """
+import json
 import os
 import tempfile
 
@@ -216,3 +217,61 @@ def test_execution_loop_auto_approve_end_to_end(env, monkeypatch):
 def test_broker_is_abstract():
     with pytest.raises(TypeError):
         Broker()
+
+
+# ---------- 8) P1-1：T+1 加仓漏洞修复（昨日建仓 + 今日加仓 → 今日不可卖） ----------
+def test_t1_blocks_sell_after_same_day_add(env):
+    acc = env["acc"]
+    oms = OMS(acc, db_path=env["oms_db"], allow_auto_approve=True)
+    # 昨日建仓
+    acc.buy("600519.SH", 100, "2024-08-05", close=100.0)
+    # 今日加仓（entry_date 仍是昨日，但 last_buy_date 应为今日）
+    acc.buy("600519.SH", 100, "2024-08-06", close=100.0)
+    pos = next(p for p in acc.positions() if p["code"] == "600519.SH")
+    assert pos["entry_date"] == "2024-08-05"        # 首次建仓日不变
+    assert pos["last_buy_date"] == "2024-08-06"     # 加仓同步更新（修复点）
+
+    o = oms.create_order("600519.SH", "SELL", 200, "2024-08-06")
+    oms.approve(o.id, by="auto-sim")
+    ctx = MarketContext(date="2024-08-06", code="600519.SH",
+                        open=100, high=100, low=100, close=100, preclose=100)
+    f = oms.submit(o.id, _broker_for(acc), ctx)
+    assert not f.ok and f.reject_reason == RejectReason.T1_SELL
+
+
+def test_t1_allows_sell_next_day(env):
+    acc = env["acc"]
+    oms = OMS(acc, db_path=env["oms_db"], allow_auto_approve=True)
+    acc.buy("600519.SH", 100, "2024-08-05", close=100.0)
+    o = oms.create_order("600519.SH", "SELL", 100, "2024-08-06")   # 次日卖 → 放行
+    oms.approve(o.id, by="auto-sim")
+    ctx = MarketContext(date="2024-08-06", code="600519.SH",
+                        open=100, high=100, low=100, close=100, preclose=100)
+    f = oms.submit(o.id, _broker_for(acc), ctx)
+    assert f.ok and f.filled_qty == 100
+
+
+# ---------- 9) P1-2：deck 审批产物解析（人工审批链路） ----------
+def test_load_plan_from_deck_parses_buy_and_skips_abandon(tmp_path):
+    from execution import execution_loop as el
+    deck = tmp_path / "deck_decisions.json"
+    deck.write_text(json.dumps([
+        {"action": "buy", "code": "600519.SH", "qty": 100, "reason": "审批买入"},
+        {"action": "abandon", "code": "000001.SZ"},          # 放弃 → 忽略
+        {"action": "buy", "code": "000002.SZ"},              # 缺 qty → 跳过
+    ], ensure_ascii=False), encoding="utf-8")
+    plan = el.load_plan_from_deck(str(deck))
+    assert len(plan["orders"]) == 1
+    assert plan["orders"][0]["code"] == "600519.SH"
+    assert plan["orders"][0]["qty"] == 100
+    assert plan["orders"][0]["side"] == "BUY"
+
+
+# ---------- 10) P2-1：无行情不应被臆断为退市 ----------
+def test_no_bar_is_no_market_data_not_delisted(monkeypatch):
+    from execution import execution_loop as el
+    monkeypatch.setattr(el, "_bars_db_path",
+                        lambda: el.BASE / "data" / "cache" / "__nonexistent__.db")
+    ctx = el.build_ctx_from_db("600519.SH", "2024-08-06")
+    # 库不存在/无行情 → close=0 且不标 delisted，让 preflight 判 NO_MARKET_DATA
+    assert ctx is None or (ctx.close == 0.0 and not ctx.delisted)

@@ -21,6 +21,7 @@ import argparse
 import csv
 import os
 import sys
+import time
 import warnings
 from pathlib import Path
 
@@ -73,9 +74,30 @@ def _from_tushare(token: str):
     return out
 
 
-def _from_akshare():
+def _from_akshare(retries: int = 3, wait: float = 4.0):
+    """从 akshare 拉退市/停牌清单。
+
+    ★重试：akshare 走的是公开网页接口，常见
+      `RemoteDisconnected: Remote end closed connection without response`
+      （服务端限流/瞬时断连，尤其在同时跑 bulk_loader 建库、网络连接紧张时）。
+      这类失败是**瞬时**的，重试即可成功 —— 不要让它把 F-2 整条链拖成 0 只。
+    """
     import akshare as ak
-    df = ak.stock_zh_a_stop_em()
+    df, last_err = None, None
+    for i in range(retries):
+        try:
+            df = ak.stock_zh_a_stop_em()
+            if df is not None and len(df):
+                break
+            last_err = RuntimeError("返回空表")
+        except Exception as e:
+            last_err = e
+        if i < retries - 1 and (df is None or not len(df)):
+            print(f"  [akshare] 第 {i + 1}/{retries} 次失败"
+                  f"（{type(last_err).__name__}），{wait:.0f}s 后重试…")
+            time.sleep(wait)
+    if df is None or not len(df):
+        raise RuntimeError(f"akshare 连续 {retries} 次失败：{last_err}")
     out = []
     # 列名随 akshare 版本变化，做容错映射
     col = {c: c for c in df.columns}

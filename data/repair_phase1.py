@@ -83,11 +83,67 @@ LOCAL_SCRIPTS = [
 ]
 
 
-def _run(script: str, args: list = None) -> bool:
-    """执行一个子脚本，返回是否成功（rc == 0）"""
+MAX_ECHO_LINES = 40      # 子脚本输出转写上限（保留尾部，避免刷屏）
+
+# 子脚本各自写独立日志，实时进度看这里（捕获模式下父日志只在结束后转写）
+SUB_LOG_HINT = {
+    "data/gen_delisted_list.py": "logs/（脚本自打印）",
+    "data/backfill_delisted.py": "logs/backfill_delisted.log",
+    "data/backfill_delisted_tushare.py": "logs/backfill_delisted_tushare.log",
+    "data/fix_st_flags.py": "logs/fix_st.log",
+    "data/fix_st_flags_tushare.py": "logs/fix_st_tushare.log",
+}
+
+
+def _echo_block(text: str, prefix: str = "  | ", label: str = ""):
+    """把子脚本输出按行转写到编排日志（过长保留尾部）"""
+    lines = [l for l in (text or "").splitlines() if l.strip()]
+    if not lines:
+        return
+    if label:
+        print(f"  [{label}]")
+    if len(lines) > MAX_ECHO_LINES:
+        print(f"  ... 省略前 {len(lines) - MAX_ECHO_LINES} 行 ...")
+        lines = lines[-MAX_ECHO_LINES:]
+    for l in lines:
+        print(prefix + l.rstrip()[:200])
+
+
+def _run(script: str, args: list = None, capture: bool = True) -> bool:
+    """执行一个子脚本，返回是否成功（rc == 0）。
+
+    ★捕获子脚本的 stdout/stderr 并转写进编排日志：
+      此前直接继承父进程 stdout，实测在 Windows 下子脚本输出会**丢失**，
+      日志里只剩「失败」二字而看不到真实原因，排障极其困难
+      （本次排查 akshare 的 RemoteDisconnected 就是靠绕过去单抓 traceback 才看清）。
+      现在统一捕获：stdout 用 `  | ` 前缀、stderr 用 `  ! ` 前缀，便于定位。
+
+    ★不设 timeout：网络步骤（补拉退市股/重拉 ST）可能连续跑数小时，
+      超时会误杀正常任务；子脚本自身有重试与断点续传。
+
+    实时进度：子脚本另有独立日志，见 SUB_LOG_HINT。
+    想恢复实时输出可传 capture=False。
+    """
     cmd = [PY, str(BASE / script)] + (args or [])
     print(f"$ {' '.join(cmd)}")
-    return subprocess.run(cmd).returncode == 0
+    hint = SUB_LOG_HINT.get(script)
+    if hint and capture:
+        print(f"  （实时进度见 {hint}；本日志在结束后转写其输出摘要）")
+
+    if not capture:
+        return subprocess.run(cmd).returncode == 0
+
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        _echo_block(p.stdout, "  | ", "stdout")
+        _echo_block(p.stderr, "  ! ", "stderr")
+        if p.returncode != 0:
+            print(f"  ! 退出码 {p.returncode}")
+        return p.returncode == 0
+    except Exception as e:
+        print(f"  ! 执行异常: {type(e).__name__}: {e}")
+        return False
 
 
 def _daily_bar_rows() -> int:

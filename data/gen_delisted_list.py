@@ -157,6 +157,11 @@ def main():
     print("=== gen_delisted_list ===")
     n = generate(source=args.source, token=args.token)
     print(f"完成：{n} 只写入 delisted_list.csv")
+    if n <= 0:
+        # ★不要静默成功：取到 0 条时以非零退出码标记失败，
+        # 上层编排（repair_phase1 的 _network_step）才能感知并自动切换到备份源。
+        print("[FAIL] 未取到任何退市标的（接口可能变更 / 返回为空 / 网络异常）")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

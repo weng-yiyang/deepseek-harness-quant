@@ -30,7 +30,12 @@ def _fake_run_factory(calls, tushare_succeeds=True):
         calls.append(list(cmd))
         joined = " ".join(str(c) for c in cmd)
         ok = ("tushare" in joined) if tushare_succeeds else True
-        return types.SimpleNamespace(returncode=0 if ok else 1)
+        # _run() 现为 capture_output=True，会读 p.stdout / p.stderr，fake 必须带这两个属性
+        return types.SimpleNamespace(
+            returncode=0 if ok else 1,
+            stdout="mock stdout" if ok else "",
+            stderr="" if ok else "mock stderr：模拟该源失败",
+        )
     return _fake_run
 
 
@@ -102,7 +107,11 @@ def test_fallback_to_baostock_when_tushare_primary_fails(monkeypatch):
     def _fake(cmd, **kw):
         calls.append(list(cmd))
         ok = "tushare" not in " ".join(str(c) for c in cmd)   # tushare 失败，baostock 成功
-        return types.SimpleNamespace(returncode=0 if ok else 1)
+        return types.SimpleNamespace(
+            returncode=0 if ok else 1,
+            stdout="mock stdout" if ok else "",
+            stderr="" if ok else "mock stderr：模拟该源失败",
+        )
 
     monkeypatch.setattr(rp, "subprocess", types.SimpleNamespace(run=_fake))
     monkeypatch.setattr(rp, "_gate", lambda: (True, {}))

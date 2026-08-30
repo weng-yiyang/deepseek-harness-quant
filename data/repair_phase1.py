@@ -49,6 +49,20 @@ warnings.filterwarnings("ignore")
 for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
     os.environ.pop(k, None)
 
+# ── Windows 终端编码兜底 ───────────────────────────────────────────
+# cmd（及部分 PowerShell）的 stdout 默认 GBK，无法编码 emoji 与特殊符号。
+# 本项目多处用到 🟢🔴✅⛔✓⚠️▶ 等（repair_phase1 / data_audit / daily_pipeline），
+# 在 GBK 终端下 print 会抛 UnicodeEncodeError 让编排在最后一步中断。
+#   · 当前进程：把 stdout/stderr 切到 UTF-8
+#   · 子进程（daily_pipeline 等）：通过 PYTHONIOENCODING 继承 UTF-8
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+os.environ["PYTHONIOENCODING"] = "utf-8"
+# ────────────────────────────────────────────────────────────────
+
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 PY = sys.executable
@@ -74,6 +88,22 @@ def _run(script: str, args: list = None) -> bool:
     cmd = [PY, str(BASE / script)] + (args or [])
     print(f"$ {' '.join(cmd)}")
     return subprocess.run(cmd).returncode == 0
+
+
+def _daily_bar_rows() -> int:
+    """本地行情库 daily_bar 的行数；0=空库， -1=无法判定"""
+    try:
+        import sqlite3
+        cd = os.environ.get("LWQUANT_CACHE_DIR")
+        db = (Path(cd) if cd else (BASE / "data" / "cache")) / "bars.db"
+        if not db.exists():
+            return 0
+        con = sqlite3.connect(str(db))
+        n = con.execute("SELECT COUNT(*) FROM daily_bar").fetchone()[0]
+        con.close()
+        return int(n)
+    except Exception:
+        return -1
 
 
 def _network_step(title: str, candidates: list) -> str:
@@ -128,6 +158,23 @@ def run_repair(skip_network: bool = False, only_gate: bool = False,
     print(f"# 工作区: {BASE}  python: {PY}")
     print(f"# 主源: {primary}" + (f"   备份源: {backup}（主源失败自动切换）"
                                   if not no_fallback else "   （已关闭故障转移）"))
+
+    rows = _daily_bar_rows()
+    summary["daily_bar_rows"] = rows
+    if rows == 0:
+        # ★空库保护：本编排是「修补」流程，不会从零建库。
+        #   空库跑完也修不出 ST 标记（C5 必然 FAIL），提前拦一下省几小时。
+        print("\n" + "!" * 62)
+        print("!! 检测到 daily_bar 为 0 行 —— 本地行情库是空的！")
+        print("!! repair_phase1 只做「修补」（ST 标记 / 退市股 / 一致性清洗），")
+        print("!! 不会从零建库；空库跑完 C5（ST 标记）必然仍为 0 行而 FAIL。")
+        print("!!")
+        print("!! 请先用全量下载器建库（baostock 主源，同样零 token）：")
+        print("!!   python data/bulk_loader.py --limit 50    # 先小样本验证速率")
+        print("!!   python data/bulk_loader.py               # 全量（断点续传，数小时）")
+        print("!!   python data/bulk_loader.py --status      # 查看进度")
+        print("!! 建库完成后再跑本编排。")
+        print("!" * 62 + "\n")
 
     if only_gate:
         ok, _ = _gate()

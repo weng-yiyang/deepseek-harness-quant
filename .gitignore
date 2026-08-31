@@ -69,3 +69,6 @@ docs/发布清单_v1.0.9.md
 .coverage
 htmlcov/
 *.egg-info/
+
+# ---- 运行时熔断文件（数据审计 FAIL 时自动生成，不入库） ----
+/STOP.md

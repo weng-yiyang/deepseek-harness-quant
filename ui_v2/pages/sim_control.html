@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Deepseek HARNESS Quant · 仿真交易控制台</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/v2/assets/ui_common.css">
+<link rel="stylesheet" href="/v2/assets/anim_common.css">
+<style>
+  /* Phase 5 仿真交易控制台 —— 复用 UI v2 深色卡片风格 */
+  .sim-hero { display:flex; gap:12px; margin-top:14px; flex-wrap:wrap; }
+  .sim-hero .kpi { flex:1; min-width:150px; background:#131316; border:1px solid var(--line,#2a2a30);
+    border-radius:12px; padding:14px 16px; }
+  .sim-hero .kpi .lbl { font-size:12px; color:#a1a1aa; }
+  .sim-hero .kpi .val { font-size:20px; font-weight:700; margin-top:4px; color:#f4f4f5; font-variant-numeric:tabular-nums; }
+  .sim-hero .kpi .val.ok { color:#27ae60; } .sim-hero .kpi .val.warn { color:#f2c94c; } .sim-hero .kpi .val.bad { color:#eb5757; }
+  .ord-card { background:#131316; border:1px solid #2a2a30; border-radius:12px; padding:14px 16px; margin-top:10px; }
+  .ord-top { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap; }
+  .ord-code { font-weight:700; font-size:14px; color:#f4f4f5; }
+  .ord-sub { font-size:12px; color:#a1a1aa; margin-top:2px; }
+  .chip { font-size:12px; padding:2px 8px; border-radius:6px; font-weight:600; }
+  .chip-buy { background:rgba(235,87,87,.15); color:#eb5757; }        /* A股红涨 */
+  .chip-sell { background:rgba(39,174,96,.15); color:#27ae60; }       /* A股绿跌 */
+  .chip-pending { background:rgba(242,201,76,.14); color:#f2c94c; }
+  .chip-filled { background:rgba(94,106,210,.14); color:#5e6ad2; }
+  .chip-rejected,.chip-cancelled { background:rgba(255,255,255,.08); color:#a1a1aa; }
+  .ord-kv { display:flex; justify-content:space-between; padding:4px 0; font-size:12px; border-bottom:1px dashed rgba(255,255,255,.08); }
+  .ord-kv span { color:#a1a1aa; } .ord-kv b { color:#d4d4d8; font-weight:600; }
+  .btn { border:none; border-radius:8px; padding:8px 16px; font-size:13px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+  .btn:hover { opacity:.85; } .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .btn-ok { background:#27ae60; color:#fff; } .btn-no { background:#eb5757; color:#fff; }
+  .btn-run { background:#5e6ad2; color:#fff; } .btn-ghost { background:#26262c; color:#d4d4d8; }
+  .toolbar { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; align-items:center; }
+  .toolbar input { background:#1c1c22; border:1px solid #2a2a30; color:#f4f4f5; border-radius:8px;
+    padding:8px 12px; font-size:13px; width:140px; }
+  .note { font-size:12px; color:#a1a1aa; margin-top:6px; }
+  .log-box { background:#0f0f12; border:1px solid #2a2a30; border-radius:10px; padding:10px 12px;
+    font-family:ui-monospace,Consolas,monospace; font-size:12px; color:#9ca3af; max-height:200px; overflow-y:auto; margin-top:10px; white-space:pre-wrap; }
+  .plan-item { padding:6px 0; border-bottom:1px dashed rgba(255,255,255,.08); font-size:12px; }
+  .plan-item:last-child { border-bottom:none; }
+</style>
+</head>
+<body style="background:var(--bg,#0f0f12);margin:0">
+<div id="sidebar"></div>
+<div class="v2-wrap">
+  <div class="v2-h"><span class="bar"></span><h1>仿真交易控制台</h1>
+    <span class="sub">Phase 5 · 盘后计划 → 人工审批 → 盘前执行 · <b style="color:#f2c94c">仅仿真，不接真实资金</b></span></div>
+
+  <!-- KPI -->
+  <div class="sim-hero" id="kpi-box">
+    <div class="kpi"><div class="lbl">现金</div><div class="val" id="kpi-cash">—</div></div>
+    <div class="kpi"><div class="lbl">持仓数</div><div class="val" id="kpi-pos">—</div></div>
+    <div class="kpi"><div class="lbl">待审批订单</div><div class="val" id="kpi-pend">—</div></div>
+    <div class="kpi"><div class="lbl">次日计划</div><div class="val" id="kpi-plan">—</div></div>
+  </div>
+
+  <!-- 操作区 -->
+  <div class="v2-card" style="margin-top:14px">
+    <h2> 链路操作 <span class="tag">盘后生成计划 · 盘前执行已批订单（幂等+闸门保护）</span></h2>
+    <div class="toolbar">
+      <input id="op-by" placeholder="操作人（必填，留痕）" value="">
+      <button class="btn btn-run" onclick="runPostClose()">▶ 盘后链路（生成次日计划）</button>
+      <button class="btn btn-run" onclick="runPreMarket()">▶ 盘前链路（执行已批订单）</button>
+      <button class="btn btn-ghost" onclick="loadAll(true)">↻ 刷新</button>
+      <label style="font-size:12px;color:#a1a1aa;display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="chk-dry" checked> 盘前 dry-run
+      </label>
+    </div>
+    <div class="log-box" id="op-log"> 就绪。等待操作…</div>
+    <div class="note">※ 盘前链路执行前会检查数据审计闸门（STOP.md / FAIL → 拒绝执行，fail-closed）。</div>
+  </div>
+
+  <!-- 待审批订单 -->
+  <div class="v2-card" style="margin-top:14px">
+    <h2> 待审批订单 <span class="tag">human-in-the-loop · 审批需操作人留痕</span></h2>
+    <div id="pend-box"><span class="mini" style="opacity:.5">加载中…</span></div>
+  </div>
+
+  <!-- 全部订单 -->
+  <div class="v2-card" style="margin-top:14px">
+    <h2> 最近订单 <span class="tag">最近 20 条</span></h2>
+    <div id="orders-box"><span class="mini" style="opacity:.5">加载中…</span></div>
+  </div>
+
+  <!-- 次日计划 -->
+  <div class="v2-card" style="margin-top:14px">
+    <h2> 次日候选计划 <span class="tag">盘后链路产物 · logs/next_day_plan_*.json</span></h2>
+    <div id="plan-box"><span class="mini" style="opacity:.5">加载中…</span></div>
+  </div>
+
+  <!-- 持仓 -->
+  <div class="v2-card" style="margin-top:14px">
+    <h2> 当前持仓 <span class="tag">paper.db</span></h2>
+    <div id="pos-box"><span class="mini" style="opacity:.5">加载中…</span></div>
+  </div>
+</div>
+
+<script src="/v2/core/api.js"></script>
+<script src="/v2/core/render.js"></script>
+<script src="/v2/components/sidebar.js"></script>
+<script>
+(function () {
+  var opBy = document.getElementById('op-by');
+  opBy.value = localStorage.getItem('sim_op_by') || '';
+  opBy.addEventListener('change', function(){ localStorage.setItem('sim_op_by', opBy.value); });
+
+  function fmtMoney(v){ if(v===null||v===undefined) return '—';
+    return '¥' + Number(v).toLocaleString('zh-CN', {maximumFractionDigits:2}); }
+  function fmtNum(v){ return v===null||v===undefined?'—':Number(v).toLocaleString('zh-CN'); }
+  function chip(s){ return '<span class="chip chip-'+s.toLowerCase()+'">'+s+'</span>'; }
+
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+  function statusChip(st){
+    var map = {PENDING_APPROVAL:'pending', DRAFT:'pending', APPROVED:'pending',
+               SENT:'filled', FILLED:'filled', REJECTED:'rejected', CANCELLED:'cancelled'};
+    var c = map[st] || 'pending';
+    return '<span class="chip chip-'+c+'">'+esc(st)+'</span>';
+  }
+
+  function ordCard(o){
+    var side = o.side==='BUY' ? 'buy' : 'sell';
+    return '<div class="ord-card">' +
+      '<div class="ord-top"><div>' +
+        '<span class="ord-code">'+esc(o.code)+'</span> ' +
+        chip(o.side) + ' ' + statusChip(o.status) +
+        '<div class="ord-sub">#'+o.id+' · '+esc(o.date)+' · '+(o.reason||'')+'</div>' +
+      '</div>' +
+      (o.status==='PENDING_APPROVAL' || o.status==='DRAFT' ?
+        '<div class="toolbar" style="margin-top:0">' +
+          '<button class="btn btn-ok" onclick="window.approve('+o.id+')">批准</button>' +
+          '<button class="btn btn-no" onclick="window.reject('+o.id+')">驳回</button>' +
+        '</div>' : '') +
+      '</div>' +
+      '<div class="ord-kv"><span>数量</span><b>'+fmtNum(o.qty)+' 股</b></div>' +
+      '<div class="ord-kv"><span>限价</span><b>'+fmtMoney(o.limit_price)+'</b></div>' +
+      '<div class="ord-kv"><span>成交</span><b>'+(o.fill_qty?fmtNum(o.fill_qty)+' 股 @ '+fmtMoney(o.fill_price):'—')+'</b></div>' +
+      (o.reject_reason?'<div class="ord-kv"><span>驳回原因</span><b>'+esc(o.reject_reason)+'</b></div>':'') +
+    '</div>';
+  }
+
+  function log(msg){
+    var box = document.getElementById('op-log');
+    var t = new Date().toLocaleTimeString('zh-CN',{hour12:false});
+    box.textContent = '['+t+'] ' + msg + '\n' + box.textContent;
+  }
+
+  window.approve = function(oid){
+    var by = opBy.value.trim();
+    if(!by){ alert('请先填写操作人（审批留痕）'); opBy.focus(); return; }
+    LW.api.post('/api/sim/approve', {oid:oid, by:by}).then(function(d){
+      if(d.ok){ log('✅ '+d.message); loadAll(true); }
+      else { log('❌ '+d.error); alert(d.error); }
+    }).catch(function(e){ log('❌ 审批请求失败: '+e.message); });
+  };
+  window.reject = function(oid){
+    var by = opBy.value.trim();
+    if(!by){ alert('请先填写操作人（驳回留痕）'); opBy.focus(); return; }
+    var reason = prompt('驳回原因（默认: 控制台驳回）', '人工复核不通过');
+    if(reason===null) return;
+    LW.api.post('/api/sim/reject', {oid:oid, by:by, reason:reason}).then(function(d){
+      if(d.ok){ log('✅ '+d.message); loadAll(true); }
+      else { log('❌ '+d.error); alert(d.error); }
+    }).catch(function(e){ log('❌ 驳回请求失败: '+e.message); });
+  };
+  window.runPostClose = function(){
+    var by = opBy.value.trim();
+    if(!by){ alert('请先填写操作人'); opBy.focus(); return; }
+    if(!confirm('执行盘后链路（生成次日候选计划）？')) return;
+    LW.api.post('/api/sim/run_post_close', {by:by, force:false}).then(function(d){
+      if(d.ok){ log('✅ 盘后链路完成: ' + JSON.stringify(d.summary||{})); loadAll(true); }
+      else { log('❌ '+d.error); alert(d.error); }
+    }).catch(function(e){ log('❌ 盘后链路请求失败: '+e.message); });
+  };
+  window.runPreMarket = function(){
+    var by = opBy.value.trim();
+    if(!by){ alert('请先填写操作人'); opBy.focus(); return; }
+    var dry = document.getElementById('chk-dry').checked;
+    if(!confirm('执行盘前链路（执行已批准订单）？ ' + (dry?'dry-run 模式（不实际成交）':'实际成交（仿真）') + '，仅仿真不接真实资金')) return;
+    LW.api.post('/api/sim/run_pre_market', {by:by, dry_run:dry}).then(function(d){
+      if(d.ok){ log('✅ 盘前链路完成: ' + JSON.stringify(d.summary||{})); loadAll(true); }
+      else { log('❌ '+d.error); alert(d.error); }
+    }).catch(function(e){ log('❌ 盘前链路请求失败: '+e.message); });
+  };
+
+  function renderPend(list){
+    var box = document.getElementById('pend-box');
+    var pend = (list||[]).filter(function(o){ return o.status==='PENDING_APPROVAL' || o.status==='DRAFT'; });
+    document.getElementById('kpi-pend').textContent = pend.length;
+    if(!pend.length){ box.innerHTML = '<span class="mini" style="opacity:.5">暂无待审批订单 ✓</span>'; return; }
+    box.innerHTML = pend.map(ordCard).join('');
+  }
+  function renderOrders(list){
+    var box = document.getElementById('orders-box');
+    box.innerHTML = list.length ? list.slice(0,20).map(ordCard).join('') :
+      '<span class="mini" style="opacity:.5">暂无订单</span>';
+  }
+  function renderPlan(plan){
+    var box = document.getElementById('plan-box');
+    document.getElementById('kpi-plan').textContent = plan && plan.plan ? '有' : '无';
+    if(!plan || !plan.plan){
+      box.innerHTML = '<span class="mini" style="opacity:.5">'+esc((plan&&plan.note)||'尚无次日计划，先运行盘后链路')+'</span>'; return;
+    }
+    var p = plan.plan;
+    var items = p.items || p.candidates || p.plan || [];
+    var arr = Array.isArray(items) ? items :
+      (items && typeof items==='object' ? Object.values(items) : []);
+    if(!arr.length){
+      box.innerHTML = '<div class="mini">计划文件 '+esc(plan.plan_file)+' · '+esc(plan.plan_mtime)+'<br>'+
+        '<pre style="font-size:11px;color:#a1a1aa;overflow:auto;max-height:160px">'+esc(JSON.stringify(p,null,2).slice(0,1200))+'</pre></div>';
+      return;
+    }
+    box.innerHTML = '<div class="mini" style="margin-bottom:6px">'+esc(plan.plan_file)+' · '+esc(plan.plan_mtime)+
+      ' · 共 '+arr.length+' 项</div>' + arr.map(function(it){
+        var c = it.code || it.symbol || '';
+        var s = it.side || it.action || 'BUY';
+        var q = it.qty || it.shares || '';
+        return '<div class="plan-item">'+esc(c)+' · '+esc(s)+' · '+esc(q)+' · '+(it.reason||'')+'</div>';
+      }).join('');
+  }
+  function renderPos(d){
+    var box = document.getElementById('pos-box');
+    var pos = (d&&d.positions)||[];
+    document.getElementById('kpi-pos').textContent = pos.length;
+    if(!pos.length){ box.innerHTML = '<span class="mini" style="opacity:.5">空仓</span>'; return; }
+    box.innerHTML = pos.map(function(p){
+      return '<div class="ord-card"><div class="ord-code">'+esc(p.code)+'</div>' +
+        '<div class="ord-kv"><span>数量</span><b>'+fmtNum(p.qty)+' 股</b></div>' +
+        '<div class="ord-kv"><span>成本</span><b>'+fmtMoney(p.avg_cost)+'</b></div>' +
+        '<div class="ord-kv"><span>建仓日</span><b>'+esc(p.entry_date)+'</b></div></div>';
+    }).join('');
+  }
+  function renderKpi(d){
+    var cash = d && d.cash;
+    document.getElementById('kpi-cash').textContent = cash ? fmtMoney(cash.cash) : '—';
+  }
+
+  function loadAll(bypass){
+    var no = {bypass: bypass===true};
+    LW.api.get('/api/sim/positions', no).then(renderPos).catch(function(e){ log('❌ 持仓加载失败'); });
+    LW.api.get('/api/sim/orders?status=ALL&limit=50', no).then(function(d){
+      renderPend(d.orders||[]); renderOrders(d.orders||[]);
+    }).catch(function(e){ log('❌ 订单加载失败'); });
+    LW.api.get('/api/sim/plan', no).then(renderPlan).catch(function(e){ log('❌ 计划加载失败'); });
+  }
+
+  // 初始化
+  loadAll(false);
+  LW.sidebar && LW.sidebar.render('sidebar', {active:'control'});
+})();
+</script>
+</body>
+</html>

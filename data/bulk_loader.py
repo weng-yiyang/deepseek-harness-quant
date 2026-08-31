@@ -85,10 +85,19 @@ DEFAULT_WORKERS = 2            # 多进程并行。★Baostock 免费服务对�
 
 
 def log(msg):
+    """写日志 + 打印。
+
+    ★容错：日志写入失败（PermissionError —— 例如另一进程/编辑器占用 bulk_load.log，
+      或 PowerShell 的 Get-Content -Wait 持有读句柄）时**不得中断建库**。
+      建库一次数小时，不能因为写不了一行日志就整体崩溃；此时降级为只打印到 stdout。
+    """
     line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
     print(line)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError as e:
+        print(f"[警告] 日志写入失败（不影响建库，仅少一行记录）：{e}")
 
 
 def load_universe(limit=None, start=0):

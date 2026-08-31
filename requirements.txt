@@ -1,3 +1,7 @@
+# -*- coding: utf-8 -*-
+# ↑ 必须保留：pip 读 requirements 时按 PEP263 声明解码。Windows 默认用 GBK 读本文件，
+#   其中的中文与箭头「→」(UTF-8 = E2 86 92) 会让 GBK 解码器抛
+#   UnicodeDecodeError: 'gbk' codec can't decode byte 0x92 —— 有此声明 pip 才会用 UTF-8 解码。
 # DeepSeek HARNESS Quant · 依赖清单（v2.5 → 实盘改造 Phase 0 校正）
 # 安装（建议 Python 3.11；3.10 亦可，见下方 vectorbt 说明）：
 #   python -m pip install -r requirements.txt

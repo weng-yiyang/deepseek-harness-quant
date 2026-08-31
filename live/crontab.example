@@ -1,0 +1,41 @@
+# Phase 4 盘前盘后编排 — 定时链路配置示例
+#
+# 说明：live/post_close.py 与 live/pre_market.py 都是**幂等**的，可被调度器安全重复调用。
+# 复制前请修改下面 3 个变量为你的实际路径。
+
+# ── 环境变量（crontab 里也可用 .env 或直接在命令前 export）────────────────
+#   仓库根目录
+LWQUANT_REPO=/absolute/path/to/deepseek-harness-quant
+#   数据/缓存目录（必须与 data/cache.py 的 CACHE_DIR 一致，否则读错库）
+LWQUANT_CACHE_DIR=/absolute/path/to/deepseek-harness-quant/data/cache
+#   Python 解释器（建议用项目 venv，避免依赖缺失）
+PYTHON=/absolute/path/to/venv/bin/python
+
+# ── Linux / macOS（crontab -e）────────────────────────────────────────────
+# ① 盘后编排：每个交易日 18:30（A股 15:00 收盘，留足数据落地时间）
+#    链路：数据刷新 → 机会扫描 → Pitch → 生成次日候选计划
+30 18 * * 1-5 cd $LWQUANT_REPO && $PYTHON live/post_close.py >> logs/cron_post_close.log 2>&1
+
+# ② 盘前编排：每个交易日 09:05（09:30 开盘前，留出人工最后确认时间）
+#    链路：数据闸门 → 交易日校验 → 读人工审批 → 盘前过滤 → 风控 → 执行
+#    ★未审批则自动中止（不代客决策）；数据审计未过也自动中止
+05 9 * * 1-5 cd $LWQUANT_REPO && $PYTHON live/pre_market.py >> logs/cron_pre_market.log 2>&1
+
+# ── Windows 计划任务（PowerShell，管理员权限）──────────────────────────────
+# ① 盘后 18:30
+# schtasks /create /tn "LWQ-PostClose" /sc daily /st 18:30 ^
+#   /tr "cmd /c cd /d C:\path\to\deepseek-harness-quant && C:\path\to\venv\Scripts\python.exe live\post_close.py"
+# ② 盘前 09:05
+# schtasks /create /tn "LWQ-PreMarket" /sc daily /st 09:05 ^
+#   /tr "cmd /c cd /d C:\path\to\deepseek-harness-quant && C:\path\to\venv\Scripts\python.exe live\pre_market.py"
+
+# ── 人工审批环节（不可自动化，human-in-the-loop 的核心）───────────────────
+#   盘后生成候选 → 你在 Deck 审批 → 结果写入 logs/deck_decisions.json（JSONL，每行一个 JSON）
+#   盘前只执行"你已批准"的条目；未经审批 → 自动中止，不下单。
+
+# ── 常用排障命令 ──────────────────────────────────────────────────────────
+#   python live/post_close.py --dry-run          # 只打印步骤，不真的跑
+#   python live/post_close.py --skip-refresh     # 已手动跑过数据管道时跳过刷新
+#   python live/pre_market.py --dry-run          # 只列出将执行的订单，不下单
+#   cat logs/phase4_state.json                   # 查看历次编排状态
+#   python execution/oms.py pending              # 查看待人工确认的订单

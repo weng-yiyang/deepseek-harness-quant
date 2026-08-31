@@ -6,31 +6,36 @@
 
 执行顺序（依赖链）：
   0) gen_delisted_list   生成 delisted_list.csv（F-2 数据来源；原仓库缺失）
-  1) backfill_delisted   补拉 2019 后退市股（F-2 幸存者偏差）          [需网络，--engine 选源]
-  2) fix_st_flags        重拉 isST 标记（F-1 ST 失效 → C5 FAIL）        [需网络，--engine 选源]
+  1) backfill_delisted   补拉 2019 后退市股（F-2 幸存者偏差）          [需网络]
+  2) fix_st_flags        重拉 isST 标记（F-1 ST 失效 → C5 FAIL）        [需网络]
   3) repair_consistency  清 B1/B3/B4/C3 一致性脏行（让硬闸门不误伤）    [本地，不需网络]
   4) recompute_bar_meta  重算 bar_meta.rows 累计口径（F-4）              [本地，不需网络]
-  5) (可选) 财报 PIT      tushare 财报含 ann_date（F-5）               [需网络/tushare, --finance]
+  5) (可选) 财报 PIT      tushare 财报含 ann_date（F-5）               [需网络/token, --finance]
   6) 审计闸门            DataAuditor.gate() → PASS/FAIL                [判定]
 
-数据源（--engine，默认 tushare）：
-  tushare  : 用 data/backfill_delisted_tushare.py + data/fix_st_flags_tushare.py
-             （推荐 — baostock 2024 起多次停服，tushare 主账户已确认可用）
-  baostock : 用原 data/backfill_delisted.py + data/fix_st_flags.py（仅作降级兜底）
+数据源（--engine，默认 **baostock**）：
+  baostock : 免费、免注册、无需 token；日线自带**逐日 isST** 字段，直接对应 daily_bar.is_st
+  tushare  : 备份源，需 token（积分制）；ST 走 stock_st 区间接口，财报含 ann_date（PIT）
+
+★自动故障转移（fail-over）：网络步骤在主源失败时会**自动切换到备份源重试**，
+  无需人工干预（挂机跑半夜主源挂掉也能自愈）。用 --no-fallback 可关闭该行为。
+  默认链路（零 token）：akshare 退市清单 → baostock 退市股 → baostock 逐日 ST，
+  任一环失败自动退到 tushare（需 token）。
 
 设计：
 - 网络步骤失败不致命（打印警告继续），最终由审计闸门兜底判定；
-- 本地步骤（3/4）不依赖任何外部库/网络，必定可执行；
+- 本地步骤（3/4）不依赖任何外部库/网络/token，必定可执行；
 - --skip-network：跳过 0/1/5，只跑本地修复 + 闸门（适合"数据已拉但需清洗/复算"场景）；
 - --only-gate：只跑审计闸门（快速复检）。
 - 全程只写数据/修复文件，不修改审计脚本。
 
 用法：
-  python data/repair_phase1.py                      # 全量修复（tushare 源）+ 闸门判定
-  python data/repair_phase1.py --engine baostock   # 降级用 baostock 源
-  python data/repair_phase1.py --skip-network      # 只做本地清洗/复算 + 闸门
-  python data/repair_phase1.py --only-gate         # 只跑审计闸门
-  python data/repair_phase1.py --finance           # 含财报 PIT（F-5）
+  python data/repair_phase1.py                      # 默认 baostock（零 token）+ 闸门判定
+  python data/repair_phase1.py --engine tushare     # 主源改用 tushare（需 token）
+  python data/repair_phase1.py --no-fallback        # 只用主源，不做故障转移
+  python data/repair_phase1.py --skip-network       # 只做本地清洗/复算 + 闸门
+  python data/repair_phase1.py --only-gate          # 只跑审计闸门
+  python data/repair_phase1.py --finance            # 含财报 PIT（F-5，需 tushare token）
 """
 import argparse
 import os
@@ -44,30 +49,133 @@ warnings.filterwarnings("ignore")
 for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
     os.environ.pop(k, None)
 
+# ── Windows 终端编码兜底 ───────────────────────────────────────────
+# cmd（及部分 PowerShell）的 stdout 默认 GBK，无法编码 emoji 与特殊符号。
+# 本项目多处用到 🟢🔴✅⛔✓⚠️▶ 等（repair_phase1 / data_audit / daily_pipeline），
+# 在 GBK 终端下 print 会抛 UnicodeEncodeError 让编排在最后一步中断。
+#   · 当前进程：把 stdout/stderr 切到 UTF-8
+#   · 子进程（daily_pipeline 等）：通过 PYTHONIOENCODING 继承 UTF-8
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+os.environ["PYTHONIOENCODING"] = "utf-8"
+# ────────────────────────────────────────────────────────────────
+
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
 PY = sys.executable
 
+# 引擎 → 脚本映射（F-1 ST 标记 / F-2 退市股补拉）
+F1_SCRIPTS = {
+    "baostock": "data/fix_st_flags.py",
+    "tushare": "data/fix_st_flags_tushare.py",
+}
+F2_SCRIPTS = {
+    "baostock": "data/backfill_delisted.py",
+    "tushare": "data/backfill_delisted_tushare.py",
+}
+LIST_SCRIPT = "data/gen_delisted_list.py"
+LOCAL_SCRIPTS = [
+    ("3) 清洗一致性脏行（B1/B3/B4/C3）", "data/repair_consistency.py"),
+    ("4) 重算 bar_meta.rows 累计口径（F-4）", "data/recompute_bar_meta.py"),
+]
 
-def _step(title: str, script: str = None, args: list = None, optional: bool = False,
-          allow_fail: bool = True):
-    print(f"\n{'='*60}\n>>> {title}\n{'='*60}")
-    if script is None:
-        return True  # 纯说明步骤
+
+MAX_ECHO_LINES = 40      # 子脚本输出转写上限（保留尾部，避免刷屏）
+
+# 子脚本各自写独立日志，实时进度看这里（捕获模式下父日志只在结束后转写）
+SUB_LOG_HINT = {
+    "data/gen_delisted_list.py": "logs/（脚本自打印）",
+    "data/backfill_delisted.py": "logs/backfill_delisted.log",
+    "data/backfill_delisted_tushare.py": "logs/backfill_delisted_tushare.log",
+    "data/fix_st_flags.py": "logs/fix_st.log",
+    "data/fix_st_flags_tushare.py": "logs/fix_st_tushare.log",
+}
+
+
+def _echo_block(text: str, prefix: str = "  | ", label: str = ""):
+    """把子脚本输出按行转写到编排日志（过长保留尾部）"""
+    lines = [l for l in (text or "").splitlines() if l.strip()]
+    if not lines:
+        return
+    if label:
+        print(f"  [{label}]")
+    if len(lines) > MAX_ECHO_LINES:
+        print(f"  ... 省略前 {len(lines) - MAX_ECHO_LINES} 行 ...")
+        lines = lines[-MAX_ECHO_LINES:]
+    for l in lines:
+        print(prefix + l.rstrip()[:200])
+
+
+def _run(script: str, args: list = None, capture: bool = True) -> bool:
+    """执行一个子脚本，返回是否成功（rc == 0）。
+
+    ★捕获子脚本的 stdout/stderr 并转写进编排日志：
+      此前直接继承父进程 stdout，实测在 Windows 下子脚本输出会**丢失**，
+      日志里只剩「失败」二字而看不到真实原因，排障极其困难
+      （本次排查 akshare 的 RemoteDisconnected 就是靠绕过去单抓 traceback 才看清）。
+      现在统一捕获：stdout 用 `  | ` 前缀、stderr 用 `  ! ` 前缀，便于定位。
+
+    ★不设 timeout：网络步骤（补拉退市股/重拉 ST）可能连续跑数小时，
+      超时会误杀正常任务；子脚本自身有重试与断点续传。
+
+    实时进度：子脚本另有独立日志，见 SUB_LOG_HINT。
+    想恢复实时输出可传 capture=False。
+    """
     cmd = [PY, str(BASE / script)] + (args or [])
     print(f"$ {' '.join(cmd)}")
-    rc = subprocess.run(cmd).returncode
-    if rc == 0:
-        print(f"[OK] {title}")
-        return True
-    if optional:
-        print(f"[跳过/警告] {title} 返回 {rc}（非致命，继续；最终由审计闸门判定）")
-        return True
-    if allow_fail:
-        print(f"[警告] {title} 返回 {rc}，继续；若数据仍未修好，审计闸门会 FAIL")
+    hint = SUB_LOG_HINT.get(script)
+    if hint and capture:
+        print(f"  （实时进度见 {hint}；本日志在结束后转写其输出摘要）")
+
+    if not capture:
+        return subprocess.run(cmd).returncode == 0
+
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        _echo_block(p.stdout, "  | ", "stdout")
+        _echo_block(p.stderr, "  ! ", "stderr")
+        if p.returncode != 0:
+            print(f"  ! 退出码 {p.returncode}")
+        return p.returncode == 0
+    except Exception as e:
+        print(f"  ! 执行异常: {type(e).__name__}: {e}")
         return False
-    print(f"[失败] {title} 返回 {rc}，停止")
-    sys.exit(rc)
+
+
+def _daily_bar_rows() -> int:
+    """本地行情库 daily_bar 的行数；0=空库， -1=无法判定"""
+    try:
+        import sqlite3
+        cd = os.environ.get("LWQUANT_CACHE_DIR")
+        db = (Path(cd) if cd else (BASE / "data" / "cache")) / "bars.db"
+        if not db.exists():
+            return 0
+        con = sqlite3.connect(str(db))
+        n = con.execute("SELECT COUNT(*) FROM daily_bar").fetchone()[0]
+        con.close()
+        return int(n)
+    except Exception:
+        return -1
+
+
+def _network_step(title: str, candidates: list) -> str:
+    """按候选顺序尝试网络步骤；成功即止；全失败则警告继续（网络步骤非致命）。
+
+    candidates: [(label, script, args), ...]  按优先级排列
+    返回最终成功的 label，全失败返回 None。
+    """
+    for label, script, sargs in candidates:
+        print(f"\n{'='*60}\n>>> {title} · 尝试 {label}\n{'='*60}")
+        if _run(script, sargs):
+            print(f"[OK] {title}（{label}）")
+            return label
+        print(f"[警告] {title} 在 {label} 下失败 → 尝试下一个源")
+    print(f"[跳过/警告] {title} 所有候选源均失败（非致命，继续；最终由审计闸门判定）")
+    return None
 
 
 def _gate():
@@ -88,58 +196,112 @@ def _gate():
     return ok, r
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Phase 1 数据根因修复编排器")
-    ap.add_argument("--skip-network", action="store_true", help="跳过需网络的步骤(0/1/5)，只跑本地修复+闸门")
-    ap.add_argument("--only-gate", action="store_true", help="只跑审计闸门")
-    ap.add_argument("--finance", action="store_true", help="含财报 PIT 修复(F-5, 需 tushare)")
-    ap.add_argument("--engine", default="tushare", choices=["tushare", "baostock"],
-                   help="F-1/F-2 网络数据源（默认 tushare；baostock 仅降级兜底）")
-    args = ap.parse_args()
+def run_repair(skip_network: bool = False, only_gate: bool = False,
+               finance: bool = False, engine: str = "baostock",
+               no_fallback: bool = False) -> dict:
+    """执行修复编排，返回汇总 dict（抽成函数便于测试与复用）。"""
+    primary = engine
+    backup = "tushare" if primary == "baostock" else "baostock"
+    engines = [primary] if no_fallback else [primary, backup]
 
-    engine = args.engine
-    # 引擎映射（tushare 默认，消除 baostock 停服风险）
-    f2_script = "data/backfill_delisted_tushare.py" if engine == "tushare" else "data/backfill_delisted.py"
-    f1_script = "data/fix_st_flags_tushare.py" if engine == "tushare" else "data/fix_st_flags.py"
+    summary = {
+        "engine_primary": primary,
+        "engine_backup": None if no_fallback else backup,
+        "steps": {},
+    }
 
     print(f"# Phase 1 数据根因修复编排  @ {datetime.now():%Y-%m-%d %H:%M:%S}")
-    print(f"# 工作区: {BASE}  python: {PY}  数据源: {engine}")
+    print(f"# 工作区: {BASE}  python: {PY}")
+    print(f"# 主源: {primary}" + (f"   备份源: {backup}（主源失败自动切换）"
+                                  if not no_fallback else "   （已关闭故障转移）"))
 
-    if args.only_gate:
+    rows = _daily_bar_rows()
+    summary["daily_bar_rows"] = rows
+    if rows == 0:
+        # ★空库保护：本编排是「修补」流程，不会从零建库。
+        #   空库跑完也修不出 ST 标记（C5 必然 FAIL），提前拦一下省几小时。
+        print("\n" + "!" * 62)
+        print("!! 检测到 daily_bar 为 0 行 —— 本地行情库是空的！")
+        print("!! repair_phase1 只做「修补」（ST 标记 / 退市股 / 一致性清洗），")
+        print("!! 不会从零建库；空库跑完 C5（ST 标记）必然仍为 0 行而 FAIL。")
+        print("!!")
+        print("!! 请先用全量下载器建库（baostock 主源，同样零 token）：")
+        print("!!   python data/bulk_loader.py --limit 50    # 先小样本验证速率")
+        print("!!   python data/bulk_loader.py               # 全量（断点续传，数小时）")
+        print("!!   python data/bulk_loader.py --status      # 查看进度")
+        print("!! 建库完成后再跑本编排。")
+        print("!" * 62 + "\n")
+
+    if only_gate:
         ok, _ = _gate()
-        sys.exit(0 if ok else 1)
+        summary["gate_ok"] = ok
+        return summary
 
     # 0) 生成退市清单（F-2 数据来源）
-    if not args.skip_network:
-        _step("0) 生成 delisted_list.csv（F-2 数据来源）",
-              "data/gen_delisted_list.py", optional=True)
+    #    baostock 主源时优先 akshare（免费免 token），tushare 作备
+    if not skip_network:
+        list_pri = "akshare" if primary == "baostock" else "tushare"
+        list_bak = "tushare" if list_pri == "akshare" else "akshare"
+        cands = [(f"退市清单/{list_pri}", LIST_SCRIPT, ["--source", list_pri])]
+        if not no_fallback:
+            cands.append((f"退市清单/{list_bak}", LIST_SCRIPT, ["--source", list_bak]))
+        summary["steps"]["0_list"] = _network_step(
+            "0) 生成 delisted_list.csv（F-2 数据来源）", cands)
 
     # 1) 补拉退市股（F-2）
-    if not args.skip_network:
-        _step(f"1) 补拉 2019 后退市股（F-2 幸存者偏差 · {engine}）",
-              f2_script, optional=True)
+    if not skip_network:
+        summary["steps"]["1_backfill"] = _network_step(
+            "1) 补拉 2019 后退市股（F-2 幸存者偏差）",
+            [(f"F-2/{e}", F2_SCRIPTS[e], None) for e in engines])
 
     # 2) 重拉 ST 标记（F-1）
-    if not args.skip_network:
-        _step(f"2) 重拉 isST 标记（F-1 → C5 · {engine}）",
-              f1_script, optional=True)
+    if not skip_network:
+        summary["steps"]["2_st"] = _network_step(
+            "2) 重拉 isST 标记（F-1 → C5）",
+            [(f"F-1/{e}", F1_SCRIPTS[e], None) for e in engines])
 
-    # 3) 本地一致性清洗（B1/B3/B4/C3）
-    _step("3) 清洗一致性脏行（B1/B3/B4/C3）", "data/repair_consistency.py")
+    # 3) 4) 本地步骤（不需网络/token，必定可执行）
+    for title, script in LOCAL_SCRIPTS:
+        print(f"\n{'='*60}\n>>> {title}\n{'='*60}")
+        ok = _run(script)
+        summary["steps"][script] = ok
+        print(f"[OK] {title}" if ok else f"[警告] {title} 返回非零（继续，最终由闸门判定）")
 
-    # 4) 重算 bar_meta.rows（F-4）
-    _step("4) 重算 bar_meta.rows 累计口径（F-4）", "data/recompute_bar_meta.py")
-
-    # 5) 财报 PIT（F-5，可选；fetch_quality_tushare 已含 ann_date 披露日）
-    if args.finance and not args.skip_network:
-        _step("5) 财报 PIT 披露日（F-5，已含 ann_date）",
-              "data/fetch_quality_tushare.py", optional=True)
+    # 5) 财报 PIT（F-5，可选；需 tushare token —— 没有 token 时失败不致命）
+    if finance and not skip_network:
+        summary["steps"]["5_finance"] = _network_step(
+            "5) 财报 PIT 披露日（F-5，已含 ann_date）",
+            [("F-5/tushare", "data/fetch_quality_tushare.py", None)])
 
     # 6) 审计闸门判定
     ok, _ = _gate()
+    summary["gate_ok"] = ok
     print("\n" + ("# ✅ 数据修复完成，审计放行，可继续策略/回测。" if ok
                  else "# ⛔ 审计仍 FAIL，请按上方 [FAIL] 项继续修复后重跑本编排。"))
-    sys.exit(0 if ok else 1)
+    return summary
+
+
+def build_parser():
+    """构造命令行解析器（独立成函数，便于测试默认参数）"""
+    ap = argparse.ArgumentParser(description="Phase 1 数据根因修复编排器")
+    ap.add_argument("--skip-network", action="store_true", help="跳过需网络的步骤(0/1/5)，只跑本地修复+闸门")
+    ap.add_argument("--only-gate", action="store_true", help="只跑审计闸门")
+    ap.add_argument("--finance", action="store_true", help="含财报 PIT 修复(F-5, 需 tushare token)")
+    ap.add_argument("--engine", default="baostock", choices=["baostock", "tushare"],
+                   help="F-1/F-2 网络数据源主源（默认 baostock：免费免 token）")
+    ap.add_argument("--no-fallback", action="store_true",
+                   help="关闭自动故障转移（只用主源，失败不切备份源）")
+    return ap
+
+
+def main():
+    ap = build_parser()
+    args = ap.parse_args()
+
+    s = run_repair(skip_network=args.skip_network, only_gate=args.only_gate,
+                   finance=args.finance, engine=args.engine,
+                   no_fallback=args.no_fallback)
+    sys.exit(0 if s.get("gate_ok") else 1)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,8 @@
 # DeepSeek HARNESS Quant
 
+> **Forked from** [yuanwang589-dev/deepseek-harness-quant](https://github.com/yuanwang589-dev/deepseek-harness-quant)（MIT）
+> 本项目为独立维护的 fork，作者 [Yiyang Weng](https://github.com/weng-yiyang)。上游来源保留作参考对照。
+
 自然语言驱动的 A 股量化系统。低频。主观决策 + 写死引擎 + 数据裁决。
 
 AI 不预测个股。这是硬约束，不是选项。
@@ -119,7 +122,7 @@ DSHQuant-v1.0.9-Release.zip          # 解压即用，含 HARNESS 运行时
 
 ## 许可
 
-MIT。仅供研究学习。不构成投资建议。
+MIT。版权 © 2026 Yiyang Weng（fork 自 [yuanwang589-dev/deepseek-harness-quant](https://github.com/yuanwang589-dev/deepseek-harness-quant)）。仅供研究学习。不构成投资建议。
 
 ## 文档
 

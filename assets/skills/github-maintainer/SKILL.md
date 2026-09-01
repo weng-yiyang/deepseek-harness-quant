@@ -29,7 +29,7 @@ metadata:
 | 数据 | `D:/data/cache/` + `minute/` | bars.db(18.7M 行 qfq 2010-2026)/finance.db/finance_ts.db/hist_mv.db/gdhs_full.db/lhb_full.db/rzrq_full.db/consensus_snap.db/shebao.db |
 | 知识库 | `Desktop/工作区`（工作区） | 01_研究/02_Pitch包/04_复刻/05_复现/06_数据存档/07-08_UI/09_总结归档(记忆)/10_历史任务包/11_设计书/AI协作 |
 | 因子池 | `主系统/DSHQuant/factor_pool/` | core(panel_v1/factors/combo_backtest/run_pool)/scripts/pitch/output(combo_reports 123+ 份) |
-| **开源仓库** | **`deepseek-harness-quant`** | 见第五节；GitHub：https://github.com/yuanwang589-dev/deepseek-harness-quant |
+| **开源仓库（本 fork）** | **`deepseek-harness-quant`** | 见第五节；GitHub：https://github.com/weng-yiyang/deepseek-harness-quant（上游来源：https://github.com/yuanwang589-dev/deepseek-harness-quant） |
 | HARNESS 桥 | 本机 :3080 | dsq-quant-bridge 插件：/quant/chat2 /quant/sessions /quant/niu/sessions；控制页 = 量化系统 /control |
 
 分工：主系统架构师=生产执行+裁决 ｜ 研究员=策略/论文（01_，R 系列）｜ 因子池=实证（B/C/E/F/G/O 系列）｜ AlphaGPT 研究员=科研通道（产出走 9 步入池流程，不直接进决策链）。
@@ -68,12 +68,12 @@ L1 因子参考 → 机会池/机器池(machine_pool)/竞价/turn_low 防守参�
 ### 5.1 仓库现状
 | 项 | 值 |
 |---|---|
-| 仓库 | https://github.com/yuanwang589-dev/deepseek-harness-quant（PUBLIC · MIT · master） |
+| 仓库 | https://github.com/weng-yiyang/deepseek-harness-quant（PUBLIC · MIT · master）；上游 fork 来源：https://github.com/yuanwang589-dev/deepseek-harness-quant |
 | 本地源 | `deepseek-harness-quant`（33,856 文件 / 430MB；代码 379 文件 4.6MB 入 git） |
 | 版本 | VERSION=1.0.9（CHANGELOG 记 v1.0.0，命名不一致沿用） |
 | 发布产物 | `release\`（LWQuant-v{ver}-Release.zip 完整包 / Source zip / Windows-Full zip） |
 | EXE | `dist\QuantDeck.exe`（PyInstaller onefile，~300MB；顶层 QuantDeck.exe 为运行中旧版勿覆盖） |
-| 账号/CLI | yuanwang589-dev；gh=`C:\Program Files\GitHub CLI\gh.exe`（PATH 可能未刷新，用全路径） |
+| 账号/CLI | weng-yiyang（fork 自 yuanwang589-dev）；gh=`C:\Program Files\GitHub CLI\gh.exe`（PATH 可能未刷新，用全路径） |
 
 ### 5.2 发布流程（新版本）
 
@@ -100,7 +100,7 @@ L1 因子参考 → 机会池/机器池(machine_pool)/竞价/turn_low 防守参�
 - 提交前检查：`git ls-files | wc` 应 ≈379；单文件 >50MB 必是漏配
 
 ### 5.5 常见操作
-- 改私有：`gh repo edit yuanwang589-dev/deepseek-harness-quant --visibility private`
+- 改私有：`gh repo edit weng-yiyang/deepseek-harness-quant --visibility private`
 - 推送：git push（gh 已 setup-git，凭据自动）
 - 授权失败排查：电脑浏览器（已登录）打开 https://github.com/login/device 输入设备码；手机 2FA 收不到不影响（见 5.6）
 - EXE 顶层被占用：运行中的 deck 即旧 EXE 实例，勿强制覆盖，新版放 dist/

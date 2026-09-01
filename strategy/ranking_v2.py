@@ -20,6 +20,7 @@
 """
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import warnings
@@ -33,10 +34,12 @@ sys.path.insert(0, str(BASE))
 import numpy as np
 import pandas as pd
 
-BARS_DB = Path(r"D:/data/cache/bars.db")
-FIN_DB = Path(r"D:/data/cache/finance.db")
-BASIC_DB = Path(r"D:/data/cache/stock_basic.db")
-MV_CSV = Path(r"D:/data/cache/circ_mv_map_full.csv")
+# 数据目录：优先 QUANT_DATA_DIR 环境变量，缺省回退项目内 data/cache（勿硬编码私有路径）
+_CACHE = Path(os.environ.get("QUANT_DATA_DIR", str(BASE / "data" / "cache")))
+BARS_DB = _CACHE / "bars.db"
+FIN_DB = _CACHE / "finance.db"
+BASIC_DB = _CACHE / "stock_basic.db"
+MV_CSV = _CACHE / "circ_mv_map_full.csv"
 
 
 def load_close_panel(days=300, end=None) -> pd.DataFrame:

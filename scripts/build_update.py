@@ -85,13 +85,22 @@ def walk_allow(root: Path):
 import re as _re
 
 # 脱敏：主系统私有路径/标识 → 开源相对路径（与开源包同一套规则）
+# 私有片段从环境变量读取（主系统侧运行时设置），缺省用占位符——避免开源仓库明文泄露真实用户名/品牌/目录名。
+# 主系统侧用法：export QUANT_PRIVATE_USER=<用户名> QUANT_PRIVATE_BRAND=<品牌> QUANT_PRIVATE_CODEBASE=<代码库目录>
+_PRIVATE_USER = os.environ.get("QUANT_PRIVATE_USER", "<username>")
+_PRIVATE_BRAND = os.environ.get("QUANT_PRIVATE_BRAND", "<brand>")
+_PRIVATE_CODEBASE = os.environ.get("QUANT_PRIVATE_CODEBASE", "<codebase>")
+_U = _re.escape(_PRIVATE_USER)
+_B = _re.escape(_PRIVATE_BRAND)
+_C = _re.escape(_PRIVATE_CODEBASE)
+
 _SAN_PATS = [
-    (r"D:[\\/]+" + "主系统" + "量化数据[\\/]+cache", "data/cache"),
-    (r"D:[\\/]+" + "主系统" + "量化数据", "data"),
-    (r"C:[\\/]+Users[\\/]+" + "<username>" + "[\\/]+Desktop[\\/]+" + "工作区" + "[\\/]+因子池", "data/factorpool"),
-    (r"C:[\\/]+Users[\\/]+" + "<username>" + "[\\/]+Desktop[\\/]+" + "主系统" + "[\\/]+deepseek-harness-quant", "."),
-    (r"C:[\\/]+Users[\\/]+" + "<username>", "<home>"),
-    (r"129" + "85", "<home>"),
+    (r"D:[\\/]+" + _B + "量化数据[\\/]+cache", "data/cache"),
+    (r"D:[\\/]+" + _B + "量化数据", "data"),
+    (r"C:[\\/]+Users[\\/]+" + _U + "[\\/]+Desktop[\\/]+" + _C + "[\\/]+因子池", "data/factorpool"),
+    (r"C:[\\/]+Users[\\/]+" + _U + "[\\/]+Desktop[\\/]+" + _B + "量化" + "[\\/]+deepseek-harness-quant", "."),
+    (r"C:[\\/]+Users[\\/]+" + _U, "<home>"),
+    (_U, "<home>"),
     (r"https?://quantdata888\.duckdns\.org", "https://api.tushare.pro"),
     (r"quantdata888\.duckdns\.org", "api.tushare.pro"),
     (r"DuckDNS", "代理服务器"),

@@ -37,10 +37,10 @@ def main():
     ap.add_argument("--py", required=True, help="便携 Python venv 目录")
     ap.add_argument("--node", required=True, help="便携 Node 目录（node.exe 所在）")
     ap.add_argument("--version", default=None)
-    ap.add_argument("--out", default=r"release")
+    ap.add_argument("--out", default=str(ROOT.parent / "release"))
     args = ap.parse_args()
     ver = args.version or (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    stage = Path(r"release\_full_stage\DSHQuant")
+    stage = Path(args.out) / "_full_stage" / "DSHQuant"
     if stage.exists():
         shutil.rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True, exist_ok=True)

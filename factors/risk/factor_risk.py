@@ -11,7 +11,7 @@
   3. 每因子风险档案 → 输出 output/factor_risk_{ts}.json（时间戳文件名）
   4. 供 scan.py 直通分支消费：强因子清单（家族代表）
 
-数据源：工作区/因子池/output/health/health_*.csv（glob 取最新）
+数据源：data/factorpool/output/health/health_*.csv（glob 取最新）
 """
 import csv
 import glob

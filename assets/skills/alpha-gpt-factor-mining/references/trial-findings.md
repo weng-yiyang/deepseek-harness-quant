@@ -7,12 +7,12 @@
 
 | 项 | 值 |
 |---|---|
-| 解释器 | `DSHQuant（历史目录名）\.venv\Scripts\python.exe`（系统默认 python 无数据包） |
+| 解释器 | `DSHQuant\.venv\Scripts\python.exe`（系统默认 python 无数据包） |
 | 版本 | Python 3.13.14 / pandas 3.0.5 / numpy 2.4.6 |
 | 面板 | `research_engine.load_universe()`（parquet 缓存 0.4s；列: open/high/low/close/volume/amount/turn/pct_chg/is_st；无 preclose；收益用 pct_chg/100） |
 | 特征 | `core.panel_v1._factor_single(panel, None, None, name)`（**不是** FACTOR_REGISTRY.compute——126 因子 compute_fn 全为 None） |
 | 验证链 | `quality_gate_check.verify_factor`；import 有副作用（自动跑 5 因子全链 ~230s），用 `qgc.df=df; qgc.rebal=...` 注入 |
-| 数据路径 | `D:\data\cache\{bars,hist_mv,stock_basic}.db` |
+| 数据路径 | `data/cache\{bars,hist_mv,stock_basic}.db` |
 
 ## 二、13 个问题的根因速查
 

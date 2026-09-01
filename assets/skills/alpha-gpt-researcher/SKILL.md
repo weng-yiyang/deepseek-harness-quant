@@ -35,15 +35,15 @@ metadata:
 
 | 资产 | 位置 |
 |---|---|
-| 主数据 | `D:\data\cache\{bars,hist_mv,stock_basic,lhb_full}.db` |
-| 因子池引擎 | `主系统\DSHQuant\factor_pool\core\`（37 py；`_factor_single` 特征入口、`combo_backtest` 验收v1）|
+| 主数据 | `data/cache\{bars,hist_mv,stock_basic,lhb_full}.db` |
+| 因子池引擎 | `DSHQuant\factor_pool\core\`（37 py；`_factor_single` 特征入口、`combo_backtest` 验收v1）|
 | 研究引擎 | `因子池\scripts\research_engine.py`（load_universe 缓存 0.4s）|
-| 解释器 | `DSHQuant（历史目录名）\.venv\Scripts\python.exe`（pandas 3.0.5）|
+| 解释器 | `DSHQuant\.venv\Scripts\python.exe`（pandas 3.0.5）|
 | 我的脚本 | `工作区\_trial_alphagpt\`（六轮挖掘 + 牛散实证，全可复现）|
 | 研究报告 | `因子池\output\combo_reports\`（8 份）|
 | 方法论文档 | `因子池\docs\`（AlphaGPT挖掘方法论沉淀_6轮全录）|
-| Skill 库 | `桌面\技能\skill-library\`（10 skill / 23 文件 / 137KB）|
-| 沟通 | `桌面\沟通\`（协议/索引/留言）|
+| Skill 库 | `技能\skill-library\`（10 skill / 23 文件 / 137KB）|
+| 沟通 | `沟通\`（协议/索引/留言）|
 
 ## 三、核心工作流（融合版 P1-P10）
 
@@ -90,7 +90,7 @@ P0 定域+证伪核查 → P1 建词表(符号化) → P2 生成候选(LLM/RL/�
 
 ## 七、团队协作规范
 
-1. **沟通协议**：留言 `桌面\沟通\留言_{发送方}_{主题}_{时间}.md`；归档闭环→历史；先读协作索引
+1. **沟通协议**：留言 `沟通\留言_{发送方}_{主题}_{时间}.md`；归档闭环→历史；先读协作索引
 2. **三件套接入**（入池后零改主系统）：daily_scores/{code}_rank + health/icir行 + factor_manifest/category（主系统自动归类）
 3. **强因子直通**：ICIR120≥0.5 + t≥4 → 自动进 EXT（fundamental_lowfreq 除外）
 4. **边界**：不改因子池 core/、不改主系统、不自行入池——产出走验证链+留言

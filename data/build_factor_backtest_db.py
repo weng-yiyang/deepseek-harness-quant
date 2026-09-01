@@ -5,7 +5,7 @@
 → 为每个因子（daily_scores 的 93 个 rank 因子）做「top 选股 → T+1 收益」回测，存 unified.db。
 
 数据源：
-  1. 外包 daily_scores（工作区/因子池/output/daily_scores/daily_*.csv）——每日每因子 rank（0-1 分位）
+  1. 外包 daily_scores（data/factorpool/output/daily_scores/daily_*.csv）——每日每因子 rank（0-1 分位）
   2. bars.db（qfq 日线）——算 T+1 收益
 
 口径：

@@ -24,6 +24,7 @@
 """
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -255,7 +256,7 @@ def load_st_codes() -> set:
 
 
 # ==================== 外部因子池信号源（B-4 对接协议，2026-08-09） ====================
-# 读小弟（工作区/因子池）每日评分 CSV → 因子命中 → 共识加分
+# 读小弟（data/factorpool）每日评分 CSV → 因子命中 → 共识加分
 # ★B-12 裁决落地（2026-08-10 18:20 总指导）：五强 → 十强（+max_ret20/skew20/amihud/mom60/std20，
 #   ICIR 0.417-0.642 且低相关互补；回测师规格 pitch/主系统因子消费扩展_pitch.md 档位 A）
 EXT_SIGNAL_FACTORS = ["turn_mid_prox", "sentiment", "turnover", "reversal20", "lowvol",
@@ -1072,8 +1073,10 @@ _PW_PATHS = (
     BASE / "logs" / "pitch_signal_weights.json",
 )
 # ★2026-08-14 因子池产出路径（时间戳名，glob 最新）
+# 因子池目录：优先 QUANT_FACTORPOOL_DIR 环境变量，缺省回退项目内 data/factorpool（勿硬编码私有路径）
+_FACTORPOOL_DIR = Path(os.environ.get("QUANT_FACTORPOOL_DIR", str(BASE / "data" / "factorpool")))
 _PW_POOL_PATHS = (
-    Path(r"<home>\Desktop\工作区\因子池\output"),
+    _FACTORPOOL_DIR / "output",
 )
 
 

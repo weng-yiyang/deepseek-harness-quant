@@ -120,6 +120,25 @@ DSHQuant-v1.0.9-Release.zip          # 解压即用，含 HARNESS 运行时
 - 换手率 2019 年前缺失，2019 前换手类结论作废。
 - 配置：`config/params.yaml.example`（Tushare token）。
 
+## 环境变量
+
+数据目录等运行时路径由环境变量驱动（替代原硬编码的私有路径）。所有变量都有安全默认值，数据放在项目内 `data/cache` 时通常无需设置任何变量。
+
+`.env` 加载：启动器 `launcher.py` 会自动加载项目根目录的 `.env`（纯标准库实现，无第三方依赖）。复制 `.env.example` 为 `.env` 后按需取消注释即可（`.env` 已加入 `.gitignore`，不会提交）。
+
+| 变量 | 用途 | 默认值 |
+|---|---|---|
+| `QUANT_DATA_DIR` | 主数据目录（bars.db / finance.db / stock_basic.db / circ_mv_map_full.csv） | `<项目根>/data/cache` |
+| `QUANT_FACTORPOOL_DIR` | 因子池产出目录（pitch_signal_weights_*.json） | `<项目根>/data/factorpool` |
+| `LWQUANT_CACHE_DIR` | 主缓存目录（data/cache.py / live / execution 等读取） | `<项目根>/data/cache` |
+| `QUANT_PRIVATE_USER` | 发布脚本脱敏规则中的用户名片段 | `<username>` |
+| `QUANT_PRIVATE_BRAND` | 发布脚本脱敏规则中的品牌片段 | `<brand>` |
+| `QUANT_PRIVATE_CODEBASE` | 发布脚本脱敏规则中的代码库目录片段 | `<codebase>` |
+| `DSH_HOME` | HARNESS 运行时 home 目录 | `harness/home` |
+| `LW_TUSHARE_TOKEN` | Tushare token（财报主源） | 无 |
+
+优先级：**环境变量 > `.env` > 代码默认值**；`.env` 不会覆盖已存在的环境变量。
+
 ## 许可
 
 MIT。版权 © 2026 Yiyang Weng（fork 自 [yuanwang589-dev/deepseek-harness-quant](https://github.com/yuanwang589-dev/deepseek-harness-quant)）。仅供研究学习。不构成投资建议。
